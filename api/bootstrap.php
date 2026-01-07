@@ -2,6 +2,10 @@
 
 declare(strict_types=1);
 
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
 const MIN_SCORE = 100;
 const MAX_ENTRIES = 10;
 const NAME_MAX_LENGTH = 12;
@@ -13,19 +17,23 @@ const PROFANE = [
   "DICK",
   "PISS",
   "TWAT",
-  "PORN"
+  "PORN",
+  "BUTT",
+  "PENIS",
+  "VAGINA",
+  "URINE"
 ];
 const INITIAL_SCORES = [
-  ["name" => "WINGTIPSTUDIO", "score" => 1500000],
-  ["name" => "WINGTIPSTUDIO", "score" => 900000],
-  ["name" => "WINGTIPSTUDIO", "score" => 650000],
-  ["name" => "WINGTIPSTUDIO", "score" => 420000],
-  ["name" => "WINGTIPSTUDIO", "score" => 250000],
-  ["name" => "WINGTIPSTUDIO", "score" => 120000],
-  ["name" => "WINGTIPSTUDIO", "score" => 50000],
-  ["name" => "WINGTIPSTUDIO", "score" => 10000],
-  ["name" => "WINGTIPSTUDIO", "score" => 1000],
-  ["name" => "WINGTIPSTUDIO", "score" => 100]
+  ["name" => "WINGTIP", "score" => 75000],
+  ["name" => "WINGTIP", "score" => 52000],
+  ["name" => "WINGTIP", "score" => 37000],
+  ["name" => "WINGTIP", "score" => 23300],
+  ["name" => "WINGTIP", "score" => 12500],
+  ["name" => "WINGTIP", "score" => 5900],
+  ["name" => "WINGTIP", "score" => 3800],
+  ["name" => "WINGTIP", "score" => 1400],
+  ["name" => "WINGTIP", "score" => 600],
+  ["name" => "WINGTIP", "score" => 100]
 ];
 const SCORE_TABLE = "scores";
 

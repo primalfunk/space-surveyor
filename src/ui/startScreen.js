@@ -149,16 +149,16 @@ export function showStartScreen(root, onStart) {
   const scoresList = document.createElement("div");
   scoresList.className = "start-scores-list";
   const defaultScores = [
-    { name: "wingtipstudio", score: 1500000 },
-    { name: "wingtipstudio", score: 900000 },
-    { name: "wingtipstudio", score: 650000 },
-    { name: "wingtipstudio", score: 420000 },
-    { name: "wingtipstudio", score: 250000 },
-    { name: "wingtipstudio", score: 120000 },
-    { name: "wingtipstudio", score: 50000 },
-    { name: "wingtipstudio", score: 10000 },
-    { name: "wingtipstudio", score: 1000 },
-    { name: "wingtipstudio", score: 100 }
+    { name: "WINGTIP", score: 75000 },
+    { name: "WINGTIP", score: 52000 },
+    { name: "WINGTIP", score: 37000 },
+    { name: "WINGTIP", score: 23300 },
+    { name: "WINGTIP", score: 12500 },
+    { name: "WINGTIP", score: 5900 },
+    { name: "WINGTIP", score: 3800 },
+    { name: "WINGTIP", score: 1400 },
+    { name: "WINGTIP", score: 600 },
+    { name: "WINGTIP", score: 100 }
   ];
 
   const renderScores = (entries) => {
@@ -180,8 +180,9 @@ export function showStartScreen(root, onStart) {
       name.textContent = entry.name || "---";
       const value = document.createElement("div");
       value.className = "start-scores-value";
-      value.textContent = Number.isFinite(entry.score)
-        ? entry.score.toLocaleString("en-US")
+      const numericScore = Number(entry.score);
+      value.textContent = Number.isFinite(numericScore)
+        ? numericScore.toLocaleString("en-US")
         : "0";
       row.appendChild(rank);
       row.appendChild(name);
@@ -197,7 +198,7 @@ export function showStartScreen(root, onStart) {
 
   const loadScores = async () => {
     try {
-      const res = await fetch("/api/score");
+      const res = await fetch("/api/score/");
       if (!res.ok) {
         throw new Error("fetch failed");
       }
@@ -332,4 +333,3 @@ function createBackgroundObjects(layer, starCount, asteroidCount) {
 
   return objects;
 }
-

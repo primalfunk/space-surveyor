@@ -1,4 +1,4 @@
-const SCORE_ENDPOINT = "/api/score";
+const SCORE_ENDPOINT = "/api/score/";
 const MIN_QUALIFY_SCORE = 100;
 const NAME_MAX_LENGTH = 12;
 
@@ -55,7 +55,10 @@ function renderLeaderboard(scores) {
 
     const value = document.createElement("div");
     value.className = "leaderboard-score";
-    value.textContent = Number.isFinite(entry.score) ? entry.score.toLocaleString("en-US") : "0";
+    const numericScore = Number(entry.score);
+    value.textContent = Number.isFinite(numericScore)
+      ? numericScore.toLocaleString("en-US")
+      : "0";
 
     row.appendChild(rank);
     row.appendChild(name);
