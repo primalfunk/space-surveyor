@@ -22,12 +22,7 @@ Space Surveyor is a retro-inspired space exploration and combat game. Pilot a su
 
 Scoring values live in `src/game/gameLoop.js` under `SCORE_POINTS`.
 
-Default values:
-- Asteroid (full): 25
-- Asteroid fragment: 50% of asteroid score (rounded)
-- Enemy ship: 65
-- Fuel pickup: 15
-- Survey completion: 50
+Earn points by destroying asteroids or enemies, collecting fuel, or delivering survey data to drop zones.
 
 Multiplier:
 - Each completed survey increases the multiplier by 1.
