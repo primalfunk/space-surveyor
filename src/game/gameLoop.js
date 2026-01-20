@@ -116,6 +116,24 @@ const ALERT = {
   DURATION: 2,
   FADE: 0.25
 };
+const HUD_COLORS = {
+  PANEL_START: "rgba(8, 12, 16, 0.9)",
+  PANEL_END: "rgba(14, 24, 28, 0.82)",
+  PANEL_STROKE: "rgba(120, 170, 180, 0.55)",
+  PANEL_TICK: "rgba(200, 220, 220, 0.18)",
+  PANEL_TEXT: "rgba(230, 240, 240, 0.95)",
+  PANEL_MUTED: "rgba(170, 188, 194, 0.7)",
+  ACCENT: "rgba(120, 200, 190, 0.95)",
+  ACCENT_SOFT: "rgba(120, 200, 190, 0.35)",
+  ACCENT_GLOW: "rgba(120, 200, 190, 0.55)",
+  WARM: "rgba(210, 185, 150, 0.95)",
+  WARNING: "rgba(210, 130, 120, 0.95)",
+  ENEMY: "rgba(200, 110, 110, 0.9)",
+  ASTEROID: "rgba(180, 185, 190, 0.4)",
+  MAP_BG: "rgba(6, 10, 12, 0.65)",
+  MAP_COMPLETE: "rgba(100, 170, 160, 0.1)",
+  ALERT_STROKE: "rgba(6, 10, 12, 0.75)"
+};
 const SHAKE = {
   DURATION: 0.35,
   HIT: 6,
@@ -311,10 +329,10 @@ function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, scree
   ctx.save();
 
   // background
-  ctx.fillStyle = "rgba(0,0,0,0.6)";
+  ctx.fillStyle = HUD_COLORS.MAP_BG;
   ctx.fillRect(x0, y0, size, size);
 
-  ctx.strokeStyle = "white";
+  ctx.strokeStyle = HUD_COLORS.PANEL_STROKE;
   ctx.strokeRect(x0, y0, size, size);
 
   // completed sector background tint
@@ -325,12 +343,12 @@ function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, scree
     const bx0 = cx + ((sector.bounds.x - ship.x) / range) * (size / 2);
     const by0 = cy + ((sector.bounds.y - ship.y) / range) * (size / 2);
     const bSize = (sector.bounds.size / range) * (size / 2);
-    ctx.fillStyle = "rgba(120, 255, 140, 0.08)";
+    ctx.fillStyle = HUD_COLORS.MAP_COMPLETE;
     ctx.fillRect(bx0, by0, bSize, bSize);
   }
 
   // ship (center)
-  ctx.fillStyle = "white";
+  ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
   ctx.beginPath();
   ctx.arc(cx, cy, 3, 0, Math.PI * 2);
   ctx.fill();
@@ -345,7 +363,7 @@ function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, scree
       const my = cy + (dy / range) * (size / 2);
       const t = 1 - (ping.life / ping.maxLife);
       const radius = 4 + t * 10;
-      ctx.strokeStyle = `rgba(255, 120, 120, ${0.6 * (1 - t)})`;
+      ctx.strokeStyle = `rgba(200, 110, 110, ${0.6 * (1 - t)})`;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.arc(mx, my, radius, 0, Math.PI * 2);
@@ -370,7 +388,7 @@ function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, scree
       ctx.fill();
     }
 
-    ctx.fillStyle = "rgba(200, 200, 200, 0.8)";
+    ctx.fillStyle = "rgba(180, 190, 195, 0.8)";
     for (const asteroid of sector.asteroids) {
       const dx = asteroid.x - ship.x;
       const dy = asteroid.y - ship.y;
@@ -395,7 +413,7 @@ function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, scree
       const mx = cx + (dx / range) * (size / 2);
       const my = cy + (dy / range) * (size / 2);
       const pulse = 0.5 + Math.abs(Math.sin(performance.now() / 250));
-      ctx.fillStyle = `rgba(255, 80, 80, ${0.5 + pulse * 0.5})`;
+      ctx.fillStyle = `rgba(200, 110, 110, ${0.4 + pulse * 0.45})`;
       ctx.beginPath();
       ctx.arc(mx, my, 2.5 + pulse, 0, Math.PI * 2);
       ctx.fill();
@@ -411,7 +429,7 @@ function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, scree
       if (Math.abs(zdx) <= range && Math.abs(zdy) <= range) {
         const zx = cx + (zdx / range) * (size / 2);
         const zy = cy + (zdy / range) * (size / 2);
-        ctx.strokeStyle = "rgba(0, 255, 0, 0.8)";
+        ctx.strokeStyle = "rgba(120, 200, 190, 0.8)";
         ctx.lineWidth = 2;
         ctx.strokeRect(zx - 5, zy - 5, 10, 10);
       }
@@ -423,7 +441,7 @@ function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, scree
       if (Math.abs(gdx) <= range && Math.abs(gdy) <= range) {
         const gx = cx + (gdx / range) * (size / 2);
         const gy = cy + (gdy / range) * (size / 2);
-        ctx.fillStyle = "rgba(120, 255, 120, 0.9)";
+        ctx.fillStyle = "rgba(120, 200, 190, 0.9)";
         ctx.beginPath();
         ctx.arc(gx, gy, 3, 0, Math.PI * 2);
         ctx.fill();
@@ -1048,8 +1066,8 @@ function drawFuelGauge(ctx, ship, screenW, screenH) {
 
   ctx.save();
   const panelGrad = ctx.createLinearGradient(x, y, x + panelW, y + panelH);
-  panelGrad.addColorStop(0, "rgba(6, 10, 24, 0.85)");
-  panelGrad.addColorStop(1, "rgba(10, 70, 110, 0.75)");
+  panelGrad.addColorStop(0, HUD_COLORS.PANEL_START);
+  panelGrad.addColorStop(1, HUD_COLORS.PANEL_END);
 
   ctx.beginPath();
   ctx.moveTo(x + 16, y);
@@ -1059,33 +1077,33 @@ function drawFuelGauge(ctx, ship, screenW, screenH) {
   ctx.closePath();
   ctx.fillStyle = panelGrad;
   ctx.fill();
-  ctx.strokeStyle = "rgba(120, 220, 255, 0.6)";
+  ctx.strokeStyle = HUD_COLORS.PANEL_STROKE;
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
+  ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
   ctx.fillRect(barX - 2, barY - 2, barW + 4, barH + 4);
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+  ctx.strokeStyle = HUD_COLORS.PANEL_TICK;
   ctx.lineWidth = 1;
   ctx.strokeRect(barX, barY, barW, barH);
 
   const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
-  grad.addColorStop(0, "rgba(255, 80, 80, 0.9)");
-  grad.addColorStop(0.5, "rgba(255, 220, 80, 0.9)");
-  grad.addColorStop(1, "rgba(80, 220, 120, 0.9)");
-  ctx.fillStyle = depleted ? "rgba(255, 80, 80, 0.9)" : grad;
+  grad.addColorStop(0, "rgba(200, 110, 110, 0.9)");
+  grad.addColorStop(0.55, HUD_COLORS.WARM);
+  grad.addColorStop(1, "rgba(120, 190, 175, 0.9)");
+  ctx.fillStyle = depleted ? "rgba(200, 110, 110, 0.9)" : grad;
   ctx.fillRect(barX, barY, fillWidth, barH);
 
-  ctx.fillStyle = "rgba(190, 240, 255, 0.85)";
+  ctx.fillStyle = HUD_COLORS.PANEL_MUTED;
   ctx.font = `12px ${HUD_FONT}`;
   ctx.textAlign = "left";
   ctx.fillText("FUEL", barX + 20, y + 18);
   ctx.textAlign = "right";
-  ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+  ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
   ctx.fillText(fuelValue, x + panelW - 12, y + 18);
 
   if (depleted) {
-    ctx.fillStyle = "rgba(255, 120, 120, 0.95)";
+    ctx.fillStyle = HUD_COLORS.WARNING;
     ctx.font = `11px ${HUD_FONT}`;
     ctx.textAlign = "right";
     ctx.fillText("Press Q to restart", x + panelW - 12, y + panelH - 8);
@@ -1099,7 +1117,7 @@ function drawStatusHud(ctx, ship, lives, surveyed, timeSpent, screenW, screenH) 
   headingDeg = ((headingDeg % 360) + 360) % 360;
 
   ctx.save();
-  ctx.fillStyle = "white";
+  ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
   ctx.font = `16px ${HUD_FONT}`;
   ctx.textAlign = "left";
   ctx.fillText(`Lives: ${lives}`, 20, 24);
@@ -1126,8 +1144,8 @@ function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH) {
   ctx.save();
 
   const panelGrad = ctx.createLinearGradient(x, y, x + panelW, y + panelH);
-  panelGrad.addColorStop(0, "rgba(6, 10, 24, 0.85)");
-  panelGrad.addColorStop(1, "rgba(10, 70, 110, 0.75)");
+  panelGrad.addColorStop(0, HUD_COLORS.PANEL_START);
+  panelGrad.addColorStop(1, HUD_COLORS.PANEL_END);
 
   ctx.beginPath();
   ctx.moveTo(x + 24, y);
@@ -1137,11 +1155,11 @@ function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH) {
   ctx.closePath();
   ctx.fillStyle = panelGrad;
   ctx.fill();
-  ctx.strokeStyle = "rgba(120, 220, 255, 0.6)";
+  ctx.strokeStyle = HUD_COLORS.PANEL_STROKE;
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+  ctx.strokeStyle = HUD_COLORS.PANEL_TICK;
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(x + 10, y + 8);
@@ -1149,7 +1167,7 @@ function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH) {
   ctx.stroke();
 
   ctx.textAlign = "left";
-  ctx.fillStyle = "rgba(190, 240, 255, 0.85)";
+  ctx.fillStyle = HUD_COLORS.PANEL_MUTED;
   ctx.font = `12px ${HUD_FONT}`;
   ctx.fillText("SCORE", labelX, labelY);
 
@@ -1165,9 +1183,9 @@ function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH) {
     const barX = scoreX - 16;
     const barY = scoreY - 30 - pulseEase * 14;
     const barGrad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
-    barGrad.addColorStop(0, "rgba(255, 255, 255, 0)");
-    barGrad.addColorStop(0.5, `rgba(255, 255, 255, ${0.9 * pulseEase + 0.35})`);
-    barGrad.addColorStop(1, "rgba(255, 255, 255, 0)");
+    barGrad.addColorStop(0, "rgba(0, 0, 0, 0)");
+    barGrad.addColorStop(0.5, `rgba(120, 200, 190, ${0.7 * pulseEase + 0.25})`);
+    barGrad.addColorStop(1, "rgba(0, 0, 0, 0)");
     ctx.fillStyle = barGrad;
     ctx.fillRect(barX, barY, barW, barH);
 
@@ -1176,18 +1194,18 @@ function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH) {
     const bar2X = scoreX - 6;
     const bar2Y = scoreY + 8 + pulseEase * 6;
     const bar2Grad = ctx.createLinearGradient(bar2X, 0, bar2X + bar2W, 0);
-    bar2Grad.addColorStop(0, "rgba(255, 255, 255, 0)");
-    bar2Grad.addColorStop(0.5, `rgba(170, 230, 255, ${0.7 * pulseEase + 0.25})`);
-    bar2Grad.addColorStop(1, "rgba(255, 255, 255, 0)");
+    bar2Grad.addColorStop(0, "rgba(0, 0, 0, 0)");
+    bar2Grad.addColorStop(0.5, `rgba(170, 210, 205, ${0.55 * pulseEase + 0.2})`);
+    bar2Grad.addColorStop(1, "rgba(0, 0, 0, 0)");
     ctx.fillStyle = bar2Grad;
     ctx.fillRect(bar2X, bar2Y, bar2W, bar2H);
   }
 
   ctx.font = `28px ${HUD_FONT}`;
   ctx.save();
-  ctx.shadowColor = "rgba(80, 220, 255, 0.75)";
+  ctx.shadowColor = HUD_COLORS.ACCENT_GLOW;
   ctx.shadowBlur = glow;
-  ctx.fillStyle = "rgba(150, 230, 255, 0.6)";
+  ctx.fillStyle = "rgba(120, 200, 190, 0.6)";
   ctx.translate(scoreX, scoreY);
   ctx.scale(pulseScale, pulseScale);
   ctx.fillText(scoreText, 0, 0);
@@ -1195,12 +1213,12 @@ function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH) {
 
   ctx.save();
   ctx.shadowBlur = 0;
-  ctx.fillStyle = "#ffffff";
+  ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
   ctx.translate(scoreX, scoreY);
   ctx.scale(pulseScale, pulseScale);
   ctx.fillText(scoreText, 0, 0);
   ctx.restore();
-  ctx.strokeStyle = "rgba(0, 70, 110, 0.9)";
+  ctx.strokeStyle = "rgba(6, 20, 24, 0.9)";
   ctx.lineWidth = 2;
   ctx.save();
   ctx.translate(scoreX, scoreY);
@@ -1219,18 +1237,18 @@ function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH) {
     badgeY,
     badgeR
   );
-  badgeGrad.addColorStop(0, "rgba(255, 240, 170, 0.95)");
-  badgeGrad.addColorStop(1, "rgba(255, 120, 60, 0.95)");
+  badgeGrad.addColorStop(0, "rgba(220, 200, 170, 0.95)");
+  badgeGrad.addColorStop(1, "rgba(170, 130, 100, 0.95)");
 
   ctx.beginPath();
   ctx.arc(badgeX, badgeY, badgeR, 0, Math.PI * 2);
   ctx.fillStyle = badgeGrad;
   ctx.fill();
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.7)";
+  ctx.strokeStyle = "rgba(230, 235, 235, 0.55)";
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  ctx.strokeStyle = `rgba(255, 230, 150, ${0.4 + ringPulse * 0.6})`;
+  ctx.strokeStyle = `rgba(190, 200, 190, ${0.35 + ringPulse * 0.5})`;
   ctx.lineWidth = 3;
   ctx.beginPath();
   ctx.arc(
@@ -1243,10 +1261,10 @@ function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH) {
   ctx.stroke();
 
   ctx.textAlign = "center";
-  ctx.fillStyle = "rgba(30, 10, 0, 0.9)";
+  ctx.fillStyle = "rgba(8, 12, 16, 0.9)";
   ctx.font = `16px ${HUD_FONT}`;
   ctx.fillText(`x${multiplier}`, badgeX, badgeY + 6);
-  ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+  ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
   ctx.font = `10px ${HUD_FONT}`;
   ctx.fillText("MULTI", badgeX, labelY);
 
@@ -1278,8 +1296,8 @@ function drawCompassHud(ctx, ship, activeSectors, enemies, fuelPickups, screenW,
 
   ctx.save();
   const panelGrad = ctx.createLinearGradient(centerX - halfWidth, top, centerX + halfWidth, bottom);
-  panelGrad.addColorStop(0, "rgba(6, 12, 26, 0.88)");
-  panelGrad.addColorStop(1, "rgba(8, 60, 90, 0.76)");
+  panelGrad.addColorStop(0, HUD_COLORS.PANEL_START);
+  panelGrad.addColorStop(1, HUD_COLORS.PANEL_END);
 
   ctx.beginPath();
   ctx.moveTo(centerX - halfWidth + notch, top);
@@ -1289,11 +1307,11 @@ function drawCompassHud(ctx, ship, activeSectors, enemies, fuelPickups, screenW,
   ctx.closePath();
   ctx.fillStyle = panelGrad;
   ctx.fill();
-  ctx.strokeStyle = "rgba(120, 220, 255, 0.5)";
+  ctx.strokeStyle = HUD_COLORS.PANEL_STROKE;
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+  ctx.strokeStyle = HUD_COLORS.PANEL_TICK;
   ctx.lineWidth = 1;
   for (let deg = -90; deg <= 90; deg += COMPASS.TICK_DEG) {
     const rel = (deg * Math.PI) / 180;
@@ -1306,7 +1324,7 @@ function drawCompassHud(ctx, ship, activeSectors, enemies, fuelPickups, screenW,
     ctx.stroke();
   }
 
-  ctx.strokeStyle = "rgba(140, 255, 200, 0.8)";
+  ctx.strokeStyle = HUD_COLORS.ACCENT;
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.moveTo(centerX, top + 6);
@@ -1341,9 +1359,9 @@ function drawCompassHud(ctx, ship, activeSectors, enemies, fuelPickups, screenW,
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(x, y);
-    ctx.shadowColor = "rgba(255, 80, 80, 0.8)";
+    ctx.shadowColor = "rgba(200, 110, 110, 0.8)";
     ctx.shadowBlur = 10;
-    ctx.fillStyle = "rgba(255, 70, 70, 0.95)";
+    ctx.fillStyle = "rgba(200, 110, 110, 0.95)";
     ctx.beginPath();
     ctx.moveTo(0, -8);
     ctx.lineTo(7, 7);
@@ -1351,7 +1369,7 @@ function drawCompassHud(ctx, ship, activeSectors, enemies, fuelPickups, screenW,
     ctx.closePath();
     ctx.fill();
     ctx.shadowBlur = 0;
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+    ctx.strokeStyle = "rgba(230, 235, 235, 0.5)";
     ctx.lineWidth = 1;
     ctx.stroke();
     ctx.restore();
@@ -1372,7 +1390,7 @@ function drawCompassHud(ctx, ship, activeSectors, enemies, fuelPickups, screenW,
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(x, y);
-    ctx.strokeStyle = "rgba(210, 210, 210, 0.4)";
+    ctx.strokeStyle = HUD_COLORS.ASTEROID;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(-3, 0);
@@ -1385,8 +1403,8 @@ function drawCompassHud(ctx, ship, activeSectors, enemies, fuelPickups, screenW,
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(x, y);
-    ctx.fillStyle = "rgba(120, 255, 120, 0.9)";
-    ctx.strokeStyle = "rgba(20, 120, 60, 0.9)";
+    ctx.fillStyle = HUD_COLORS.ACCENT;
+    ctx.strokeStyle = "rgba(40, 90, 80, 0.9)";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.rect(-5, -5, 10, 10);
@@ -1399,8 +1417,8 @@ function drawCompassHud(ctx, ship, activeSectors, enemies, fuelPickups, screenW,
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(x, y);
-    ctx.fillStyle = "rgba(255, 210, 90, 0.95)";
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.7)";
+    ctx.fillStyle = HUD_COLORS.WARM;
+    ctx.strokeStyle = "rgba(230, 235, 235, 0.6)";
     ctx.lineWidth = 1.4;
     ctx.beginPath();
     ctx.moveTo(-4, -6);
@@ -1412,7 +1430,7 @@ function drawCompassHud(ctx, ship, activeSectors, enemies, fuelPickups, screenW,
     ctx.fill();
     ctx.stroke();
 
-    ctx.strokeStyle = "rgba(120, 80, 20, 0.8)";
+    ctx.strokeStyle = "rgba(90, 70, 50, 0.8)";
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(-2, -1);
@@ -1478,9 +1496,9 @@ function drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, screenW, s
 
   const centerX = screenW / 2;
   const centerY = screenH / 2;
-  const scanColor = "rgba(120, 255, 140, 0.95)";
-  const scanGlow = "rgba(120, 255, 160, 0.7)";
-  const fuelColor = "rgba(255, 255, 255, 1)";
+  const scanColor = HUD_COLORS.ACCENT;
+  const scanGlow = HUD_COLORS.ACCENT_GLOW;
+  const fuelColor = HUD_COLORS.PANEL_TEXT;
 
   function drawDot(angle, size, alpha, color, glow) {
     const x = centerX + Math.cos(angle) * BEARING.RADIUS;
@@ -1561,7 +1579,7 @@ function drawScreenEffects(ctx, screenW, screenH) {
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
   const glow = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, maxRadius);
-  glow.addColorStop(0, "rgba(120, 190, 255, 0.12)");
+  glow.addColorStop(0, "rgba(120, 200, 190, 0.12)");
   glow.addColorStop(1, "rgba(0, 0, 0, 0)");
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, screenW, screenH);
@@ -1609,8 +1627,8 @@ function drawAlerts(ctx, screenW, screenH) {
   const x = screenW * 0.25;
   const y = screenH * 0.25;
   ctx.lineWidth = 3;
-  ctx.strokeStyle = "rgba(0, 0, 0, 0.6)";
-  ctx.fillStyle = "rgba(240, 245, 255, 0.95)";
+  ctx.strokeStyle = HUD_COLORS.ALERT_STROKE;
+  ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
   ctx.strokeText(active.text, x, y);
   ctx.fillText(active.text, x, y);
   ctx.restore();
