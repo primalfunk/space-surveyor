@@ -1,10 +1,2146 @@
-import { Ship } from "../entities/ship.js";
-import { Asteroid } from "../entities/asteroid.js";
-import { EnemyShip } from "../entities/enemyShip.js";
-import { Camera } from "./camera.js";
-import { SectorManager, SECTOR_SIZE } from "./sectorManager.js";
-import { applyGravity, integrate } from "./physics.js";
-import { sounds, music } from "./audio.js";
+// ===== FILE: src/game/audio.js =====
+(function(){
+"use strict";
+const SOUND_DEFS = {
+  start_game: { src: "assets/sounds/mp3/start_game.mp3", volume: 0.9 },
+  laser: { src: "assets/sounds/mp3/laser.mp3", volume: 0.375 },
+  enemy_laser: { src: "assets/sounds/mp3/laser.mp3", volume: 0.1875 },
+  explosion: { src: "assets/sounds/mp3/explosion.mp3", volume: 0.85 },
+  lost_life: { src: "assets/sounds/mp3/lost_life.mp3", volume: 0.9 },
+  got_fuel: { src: "assets/sounds/mp3/got_fuel.mp3", volume: 0.8 },
+  got_survey: { src: "assets/sounds/mp3/got_survey.mp3", volume: 0.85 },
+  game_over: { src: "assets/sounds/mp3/game_over.mp3", volume: 0.9 },
+  thrust: { src: "assets/sounds/mp3/thrust.mp3", volume: 0.7 },
+  thrust_rotate: { src: "assets/sounds/mp3/thrust.mp3", volume: 0.2 }
+};
+
+class SoundManager {
+  constructor(defs) {
+    this.defs = defs;
+    this.pool = new Map();
+    this.loopHandles = new Map();
+    this.preloaded = false;
+  }
+
+  preload() {
+    if (this.preloaded) {
+      return;
+    }
+    for (const [key, def] of Object.entries(this.defs)) {
+      const audio = new Audio(def.src);
+      audio.preload = "auto";
+      audio.volume = def.volume ?? 1;
+      this.pool.set(key, [audio]);
+    }
+    this.preloaded = true;
+  }
+
+  play(key) {
+    const def = this.defs[key];
+    if (!def) {
+      return;
+    }
+    let pool = this.pool.get(key);
+    if (!pool) {
+      pool = [];
+      this.pool.set(key, pool);
+    }
+    let audio = pool.find((entry) => entry.paused || entry.ended);
+    if (!audio) {
+      audio = new Audio(def.src);
+      audio.preload = "auto";
+      pool.push(audio);
+    }
+    audio.volume = def.volume ?? 1;
+    audio.currentTime = 0;
+    audio.play().catch(() => {});
+  }
+
+  startLoop(key, segmentSeconds = 0.4, crossfadeSeconds = 0.16) {
+    if (this.loopHandles.has(key)) {
+      return;
+    }
+    const def = this.defs[key];
+    if (!def) {
+      return;
+    }
+    const volume = def.volume ?? 1;
+    const fadeMs = Math.max(20, crossfadeSeconds * 1000);
+    const segmentMs = Math.max(100, segmentSeconds * 1000);
+    const intervalMs = Math.max(40, segmentMs - fadeMs);
+
+    const makeAudio = () => {
+      const audio = new Audio(def.src);
+      audio.preload = "auto";
+      audio.volume = volume;
+      return audio;
+    };
+
+    const a = makeAudio();
+    const b = makeAudio();
+    let active = a;
+    let inactive = b;
+    let stopped = false;
+    const rafIds = new Set();
+
+    const fade = (audio, from, to, onDone) => {
+      const start = performance.now();
+      const step = (time) => {
+        if (stopped) {
+          return;
+        }
+        const t = Math.min(1, (time - start) / fadeMs);
+        audio.volume = from + (to - from) * t;
+        if (t < 1) {
+          const id = requestAnimationFrame(step);
+          rafIds.add(id);
+        } else if (onDone) {
+          onDone();
+        }
+      };
+      const id = requestAnimationFrame(step);
+      rafIds.add(id);
+    };
+
+    const startAudio = (audio, fadeIn) => {
+      audio.currentTime = 0;
+      audio.volume = fadeIn ? 0 : volume;
+      audio.play().catch(() => {});
+      if (fadeIn) {
+        fade(audio, 0, volume);
+      }
+    };
+
+    const stopAudio = (audio) => {
+      const from = audio.volume;
+      fade(audio, from, 0, () => {
+        audio.pause();
+        audio.currentTime = 0;
+        audio.volume = volume;
+      });
+    };
+
+    startAudio(active, false);
+    const interval = setInterval(() => {
+      if (stopped) {
+        return;
+      }
+      startAudio(inactive, true);
+      stopAudio(active);
+      const next = active;
+      active = inactive;
+      inactive = next;
+    }, intervalMs);
+
+    this.loopHandles.set(key, {
+      interval,
+      audios: [a, b],
+      rafIds,
+      stop: () => {
+        stopped = true;
+        clearInterval(interval);
+        for (const id of rafIds) {
+          cancelAnimationFrame(id);
+        }
+        a.pause();
+        b.pause();
+        a.currentTime = 0;
+        b.currentTime = 0;
+        a.volume = volume;
+        b.volume = volume;
+      }
+    });
+  }
+
+  stopLoop(key) {
+    const handle = this.loopHandles.get(key);
+    if (!handle) {
+      return;
+    }
+    if (typeof handle.stop === "function") {
+      handle.stop();
+    } else {
+      clearInterval(handle.interval);
+      handle.audio.pause();
+      handle.audio.currentTime = 0;
+    }
+    this.loopHandles.delete(key);
+  }
+}
+
+const sounds = new SoundManager(SOUND_DEFS);
+
+class MusicManager {
+  constructor(tracks, volume = 0.5) {
+    this.tracks = tracks;
+    this.volume = volume;
+    this.audio = new Audio();
+    this.audio.preload = "auto";
+    this.audio.volume = volume;
+    this.index = 0;
+    this.playing = false;
+    this.onEnded = this.onEnded.bind(this);
+  }
+
+  onEnded() {
+    if (!this.playing) {
+      return;
+    }
+    this.index = (this.index + 1) % this.tracks.length;
+    this.playCurrent();
+  }
+
+  playCurrent() {
+    if (!this.tracks.length) {
+      return;
+    }
+    this.audio.src = this.tracks[this.index];
+    this.audio.currentTime = 0;
+    this.audio.play().catch(() => {});
+  }
+
+  start() {
+    if (this.playing || this.tracks.length === 0) {
+      return;
+    }
+    this.playing = true;
+    this.audio.addEventListener("ended", this.onEnded);
+    this.playCurrent();
+  }
+
+  stop() {
+    if (!this.playing) {
+      return;
+    }
+    this.playing = false;
+    this.audio.removeEventListener("ended", this.onEnded);
+    this.audio.pause();
+    this.audio.currentTime = 0;
+  }
+}
+
+const music = new MusicManager([
+  "assets/sounds/mp3/1. failed_before.mp3",
+  "assets/sounds/mp3/2. remind_me_later.mp3",
+  "assets/sounds/mp3/3. take_it_easy.mp3",
+  "assets/sounds/mp3/4. where_the_time_goes.mp3",
+  "assets/sounds/mp3/5. the_noise_in_my_head.mp3",
+  "assets/sounds/mp3/6. noonquil.mp3"
+], 0.45);
+window.sounds = sounds;
+window.music = music;
+})();
+// ===== FILE: src/game/physics.js =====
+(function(){
+"use strict";
+const GRAVITY_G = 4000;
+const SOFTENING = 80;
+const DAMPING = 0.999;
+
+function applyGravity(entity, stars, dt, debugCb = null) {
+  for (const star of stars) {
+    const dx = star.x - entity.x;
+    const dy = star.y - entity.y;
+    const r = Math.hypot(dx, dy);
+    if (Number.isFinite(star.gravityRadius) && r > star.gravityRadius) {
+      continue;
+    }
+
+    const r2 = dx * dx + dy * dy + SOFTENING * SOFTENING;
+    const rSoft = Math.sqrt(r2);
+    const force = (GRAVITY_G * star.mass) / r2;
+
+    const gx = (dx / rSoft) * force;
+    const gy = (dy / rSoft) * force;
+
+    entity.vx += gx * dt;
+    entity.vy += gy * dt;
+
+    if (debugCb) {
+      debugCb(gx, gy);
+    }
+  }
+}
+
+function integrate(entity, dt) {
+  entity.x += entity.vx * dt;
+  entity.y += entity.vy * dt;
+}
+
+function applyDamping(entity, dt) {
+  entity.vx *= DAMPING;
+  entity.vy *= DAMPING;
+}
+window.applyGravity = applyGravity;
+window.integrate = integrate;
+window.applyDamping = applyDamping;
+window.GRAVITY_G = GRAVITY_G;
+})();
+// ===== FILE: src/entities/asteroid.js =====
+(function(){
+"use strict";
+const ASTEROID_SPRITE = new Image();
+ASTEROID_SPRITE.src = "assets/ui/sprites/asteroid.png";
+const ASTEROID_CHUNK_SPRITE = new Image();
+ASTEROID_CHUNK_SPRITE.src = "assets/ui/sprites/asteroid_chunk.png";
+const ASTEROID_ROT_SPEED_MIN = 0.05;
+const ASTEROID_ROT_SPEED_MAX = 0.18;
+
+class Asteroid {
+  constructor(x, y, vx, vy, radius = 16, rotation = 0, rotationSpeed = null, spriteKey = "asteroid") {
+    this.x = x;
+    this.y = y;
+    this.vx = vx;
+    this.vy = vy;
+    this.radius = radius;
+    this.rotation = rotation;
+    this.spriteKey = spriteKey;
+    const baseSpeed = rotationSpeed ?? (
+      ASTEROID_ROT_SPEED_MIN
+      + Math.random() * (ASTEROID_ROT_SPEED_MAX - ASTEROID_ROT_SPEED_MIN)
+    );
+    this.rotationSpeed = (Math.random() < 0.5 ? -1 : 1) * baseSpeed;
+  }
+
+  update(dt) {
+    this.rotation += this.rotationSpeed * dt;
+  }
+
+  draw(ctx) {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.rotation);
+    const sprite = this.spriteKey === "chunk" ? ASTEROID_CHUNK_SPRITE : ASTEROID_SPRITE;
+    if (sprite.complete && sprite.naturalWidth > 0) {
+      const scale = (this.radius * 2) / sprite.naturalWidth;
+      const drawW = sprite.naturalWidth * scale;
+      const drawH = sprite.naturalHeight * scale;
+      ctx.drawImage(sprite, -drawW / 2, -drawH / 2, drawW, drawH);
+    } else {
+      ctx.beginPath();
+      ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(180, 180, 180, 0.9)";
+      ctx.strokeStyle = "rgba(220, 220, 220, 0.9)";
+      ctx.lineWidth = 2;
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+window.Asteroid = Asteroid;
+})();
+// ===== FILE: src/entities/enemyShip.js =====
+(function(){
+"use strict";
+const ENEMY_ROT_SPEED = 2.5;
+const ENEMY_THRUST = 120;
+const ENEMY_MAX_SPEED = 220;
+const ENEMY_STRAFE_RANGE = 520;
+const ENEMY_STRAFE_BUFFER = 90;
+const ENEMY_DRAW_SIZE = 36;
+const ENEMY_SPRITE = new Image();
+ENEMY_SPRITE.src = "assets/ui/sprites/enemy_ship.png";
+
+class EnemyShip {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.vx = 0;
+    this.vy = 0;
+    this.heading = 0;
+    this.fireCooldown = 0;
+    this.strafeDir = Math.random() < 0.5 ? -1 : 1;
+    this.strafing = false;
+  }
+
+  update(dt, targetX, targetY, shouldChase) {
+    if (this.fireCooldown > 0) {
+      this.fireCooldown = Math.max(0, this.fireCooldown - dt);
+    }
+    if (!shouldChase) {
+      return;
+    }
+
+    const dx = targetX - this.x;
+    const dy = targetY - this.y;
+    const dist = Math.hypot(dx, dy);
+    if (this.strafing) {
+      if (dist > ENEMY_STRAFE_RANGE + ENEMY_STRAFE_BUFFER) {
+        this.strafing = false;
+      }
+    } else if (dist < ENEMY_STRAFE_RANGE) {
+      this.strafing = true;
+    }
+
+    let steerX = dx;
+    let steerY = dy;
+    if (this.strafing) {
+      steerX = -dy * this.strafeDir;
+      steerY = dx * this.strafeDir;
+    }
+
+    // Heading 0 points "up", so use swapped atan2 to match sin/-cos thrust.
+    const desired = Math.atan2(steerX, -steerY);
+    let delta = desired - this.heading;
+    delta = ((delta + Math.PI) % (Math.PI * 2)) - Math.PI;
+    const turn = Math.max(-ENEMY_ROT_SPEED * dt, Math.min(ENEMY_ROT_SPEED * dt, delta));
+    this.heading += turn;
+
+    const fx = Math.sin(this.heading);
+    const fy = -Math.cos(this.heading);
+    this.vx += fx * ENEMY_THRUST * dt;
+    this.vy += fy * ENEMY_THRUST * dt;
+    const speed = Math.hypot(this.vx, this.vy);
+    if (speed > ENEMY_MAX_SPEED) {
+      const scale = ENEMY_MAX_SPEED / speed;
+      this.vx *= scale;
+      this.vy *= scale;
+    }
+  }
+
+  canFire() {
+    return this.fireCooldown <= 0;
+  }
+
+  resetFireCooldown(cooldown) {
+    this.fireCooldown = cooldown;
+  }
+
+  draw(ctx) {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.heading);
+    if (ENEMY_SPRITE.complete && ENEMY_SPRITE.naturalWidth > 0) {
+      const scale = ENEMY_DRAW_SIZE / ENEMY_SPRITE.naturalHeight;
+      const drawW = ENEMY_SPRITE.naturalWidth * scale;
+      const drawH = ENEMY_SPRITE.naturalHeight * scale;
+      ctx.drawImage(ENEMY_SPRITE, -drawW / 2, -drawH / 2, drawW, drawH);
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(0, -12);
+      ctx.lineTo(8, 10);
+      ctx.lineTo(-8, 10);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(255, 80, 80, 0.9)";
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+window.EnemyShip = EnemyShip;
+})();
+// ===== FILE: src/entities/goal.js =====
+(function(){
+"use strict";
+class Goal {
+  constructor(x, y, width, height) {
+    this.x = x;
+    this.y = y;
+    this.width = width;
+    this.height = height;
+    this.sprite = new Image();
+    this.sprite.src = "assets/ui/sprites/fuel.png";
+    this.rotation = Math.random() * Math.PI * 2;
+    const speed = 0.4 + Math.random() * 0.6;
+    this.rotationSpeed = (Math.random() < 0.5 ? -1 : 1) * speed;
+  }
+
+  update(dt) {
+    this.rotation += this.rotationSpeed * dt;
+  }
+
+  draw(ctx) {
+    ctx.save();
+    if (this.sprite.complete && this.sprite.naturalWidth > 0) {
+      ctx.translate(this.x + this.width / 2, this.y + this.height / 2);
+      ctx.rotate(this.rotation);
+      ctx.drawImage(this.sprite, -this.width / 2, -this.height / 2, this.width, this.height);
+    } else {
+      ctx.fillStyle = "rgba(0, 255, 0, 0.25)";
+      ctx.strokeStyle = "lime";
+      ctx.lineWidth = 2;
+      ctx.fillRect(this.x, this.y, this.width, this.height);
+      ctx.strokeRect(this.x, this.y, this.width, this.height);
+    }
+    ctx.restore();
+  }
+
+  containsPoint(px, py, margin = 0) {
+    return (
+      px >= this.x - margin &&
+      px <= this.x + this.width + margin &&
+      py >= this.y - margin &&
+      py <= this.y + this.height + margin
+    );
+  }
+}
+window.Goal = Goal;
+})();
+// ===== FILE: src/entities/endZone.js =====
+(function(){
+"use strict";
+
+const SCAN_SPRITE = new Image();
+SCAN_SPRITE.src = "assets/ui/sprites/scan_point.png";
+const SCAN_ROT_SPEED = 2.2;
+const SCAN_PULSE_SPEED = 3.2;
+const SCAN_PULSE_AMOUNT = 0.08;
+
+class EndZone {
+  constructor(x, y, width, height) {
+    this.x = x;
+    this.y = y;
+    this.width = width;
+    this.height = height;
+    this.rotation = Math.random() * Math.PI * 2;
+    this.rotationSpeed = (Math.random() < 0.5 ? -1 : 1) * SCAN_ROT_SPEED;
+    this.pulsePhase = Math.random() * Math.PI * 2;
+  }
+
+  update(dt) {
+    this.rotation += this.rotationSpeed * dt;
+    this.pulsePhase += SCAN_PULSE_SPEED * dt;
+  }
+
+  draw(ctx, isComplete = false) {
+    ctx.save();
+    if (SCAN_SPRITE.complete && SCAN_SPRITE.naturalWidth > 0) {
+      const pulse = 1 + Math.sin(this.pulsePhase) * SCAN_PULSE_AMOUNT;
+      const alphaPulse = 0.6 + (Math.sin(this.pulsePhase) * 0.2);
+      const centerX = this.x + this.width / 2;
+      const centerY = this.y + this.height / 2;
+
+      ctx.translate(centerX, centerY);
+
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.strokeStyle = `rgba(120, 255, 180, ${0.35 + alphaPulse * 0.35})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, (this.width * 0.7) * pulse, (this.height * 0.7) * pulse, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.save();
+      ctx.globalAlpha = alphaPulse;
+      ctx.rotate(this.rotation);
+      ctx.drawImage(
+        SCAN_SPRITE,
+        -(this.width * pulse) / 2,
+        -(this.height * pulse) / 2,
+        this.width * pulse,
+        this.height * pulse
+      );
+      ctx.restore();
+    } else {
+      ctx.fillStyle = isComplete ? "rgba(80, 255, 120, 0.2)" : "rgba(0, 255, 0, 0.15)";
+      ctx.strokeStyle = isComplete ? "rgba(80, 255, 120, 0.9)" : "rgba(0, 255, 0, 0.7)";
+      ctx.lineWidth = 2;
+      ctx.fillRect(this.x, this.y, this.width, this.height);
+      ctx.strokeRect(this.x, this.y, this.width, this.height);
+    }
+    ctx.restore();
+  }
+
+  containsPoint(px, py, margin = 0) {
+    return (
+      px >= this.x - margin &&
+      px <= this.x + this.width + margin &&
+      py >= this.y - margin &&
+      py <= this.y + this.height + margin
+    );
+  }
+}
+window.EndZone = EndZone;
+})();
+// ===== FILE: src/entities/star.js =====
+(function(){
+"use strict";
+const STAR_SPRITES = {
+  yellow: new Image(),
+  red: new Image(),
+  blue: new Image()
+};
+STAR_SPRITES.yellow.src = "assets/ui/sprites/yellow_star.png";
+STAR_SPRITES.red.src = "assets/ui/sprites/red_star.png";
+STAR_SPRITES.blue.src = "assets/ui/sprites/blue_star.png";
+
+const DEFAULTS = {
+  bodyRadius: 60,
+  bodyColor: "gold",
+  wellFill: "rgba(255, 255, 200, 0.06)",
+  wellStroke: "rgba(255, 255, 200, 0.2)",
+  minimapColor: "gold",
+  spriteKey: "yellow"
+};
+
+class Star {
+  constructor(x, y, options = {}) {
+    const opts = typeof options === "number" ? { mass: options } : options;
+    this.x = x;
+    this.y = y;
+    this.mass = opts.mass ?? 1500;
+    this.radius = opts.bodyRadius ?? DEFAULTS.bodyRadius;
+    this.bodyColor = opts.bodyColor ?? DEFAULTS.bodyColor;
+    this.wellFill = opts.wellFill ?? DEFAULTS.wellFill;
+    this.wellStroke = opts.wellStroke ?? DEFAULTS.wellStroke;
+    this.minimapColor = opts.minimapColor ?? DEFAULTS.minimapColor;
+    this.spriteKey = opts.spriteKey ?? DEFAULTS.spriteKey;
+    this.gravityRadius = opts.gravityRadius ?? (this.radius * 6);
+    this.rotation = opts.rotation ?? 0;
+    this.rotationSpeed = opts.rotationSpeed ?? 0;
+    this.pulsePhase = opts.pulsePhase ?? Math.random() * Math.PI * 2;
+    this.pulseSpeed = opts.pulseSpeed ?? 1.0;
+    this.pulseAmount = opts.pulseAmount ?? 0.06;
+    this.pulseScale = 1;
+  }
+
+  update(dt) {
+    this.rotation += this.rotationSpeed * dt;
+    this.pulsePhase += this.pulseSpeed * dt;
+    this.pulseScale = 1 + Math.sin(this.pulsePhase) * this.pulseAmount;
+  }
+
+  draw(ctx) {
+    const gravityRadius = this.gravityRadius;
+    if (Number.isFinite(gravityRadius) && gravityRadius > this.radius) {
+      ctx.save();
+      ctx.fillStyle = this.wellFill;
+      ctx.strokeStyle = this.wellStroke;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, gravityRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    const glowAlpha = 0.18 + Math.abs(Math.sin(this.pulsePhase)) * 0.2;
+    const glowRadius = this.radius * 2.2 * this.pulseScale;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = glowAlpha;
+    const glow = ctx.createRadialGradient(this.x, this.y, this.radius * 0.2, this.x, this.y, glowRadius);
+    glow.addColorStop(0, this.bodyColor);
+    glow.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, glowRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    const sprite = STAR_SPRITES[this.spriteKey];
+    if (sprite && sprite.complete && sprite.naturalWidth > 0) {
+      const scale = ((this.radius * 2) / sprite.naturalWidth) * this.pulseScale;
+      const drawW = sprite.naturalWidth * scale;
+      const drawH = sprite.naturalHeight * scale;
+      ctx.save();
+      ctx.translate(this.x, this.y);
+      ctx.rotate(this.rotation);
+      ctx.drawImage(sprite, -drawW / 2, -drawH / 2, drawW, drawH);
+      ctx.restore();
+    } else {
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.radius * this.pulseScale, 0, Math.PI * 2);
+      ctx.fillStyle = this.bodyColor;
+      ctx.fill();
+    }
+  }
+}
+window.Star = Star;
+})();
+// ===== FILE: src/entities/ship.js =====
+(function(){
+"use strict";
+const ROT_SPEED = 2.5;     // radians/sec
+const THRUST = 200;
+const MAX_FUEL = 400;
+const THRUST_FUEL_RATE = 18;
+const ROT_FUEL_RATE = 0;
+
+const SHIP_SPRITE = new Image();
+SHIP_SPRITE.src = "assets/ui/sprites/ship.png";
+const SHIP_DRAW_SIZE = 24;
+const THRUST_LOOP_SEGMENT = 0.4;
+const THRUST_LOOP_CROSSFADE = 0.16;
+const THRUST_VISUAL = {
+  PLUME_BASE: 14,
+  PLUME_MAX: 32,
+  PLUME_SPEED: 22,
+  PLUME_WIDTH: 9,
+  KICK_DURATION: 0.14,
+  KICK_RADIUS: 10,
+  KICK_ALPHA: 0.65,
+  SHIMMER_COUNT: 3,
+  SHIMMER_LENGTH: 16,
+  SHIMMER_WIDTH: 2.6,
+  FLARE_RADIUS: 12,
+  FLARE_ALPHA: 0.25
+};
+
+const keys = {};
+window.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
+window.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
+
+class Ship {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.vx = 0;
+    this.vy = 0;
+    this.heading = 0;
+    this.maxFuel = MAX_FUEL;
+    this.fuel = MAX_FUEL;
+    this.thrusting = 0;
+    this.thrustLoopActive = false;
+    this.rotateLoopActive = false;
+    this.kickTimer = 0;
+  }
+
+  stopThrustLoop() {
+    if (this.thrustLoopActive) {
+      sounds.stopLoop("thrust");
+      this.thrustLoopActive = false;
+    }
+  }
+
+  stopRotateLoop() {
+    if (this.rotateLoopActive) {
+      sounds.stopLoop("thrust_rotate");
+      this.rotateLoopActive = false;
+    }
+  }
+
+  update(dt, input = null) {
+    this.kickTimer = Math.max(0, this.kickTimer - dt);
+    const prevThrust = this.thrusting;
+    let rotationInput = 0;
+    if (keys["arrowleft"] || keys["a"]) rotationInput -= 1;
+    if (keys["arrowright"] || keys["d"]) rotationInput += 1;
+
+    let thrustInput = 0;
+    if (keys["arrowup"] || keys["w"]) thrustInput = 1;
+    if (keys["arrowdown"] || keys["s"]) thrustInput = -1;
+
+    let aimAngle = null;
+    if (input) {
+      if (typeof input.rotationInput === "number") {
+        rotationInput = input.rotationInput;
+      }
+      if (typeof input.thrustInput === "number") {
+        thrustInput = input.thrustInput;
+      }
+      if (Number.isFinite(input.aimAngle)) {
+        aimAngle = input.aimAngle;
+      }
+    }
+
+    const fuelCost = (Math.abs(thrustInput) * THRUST_FUEL_RATE + Math.abs(rotationInput) * ROT_FUEL_RATE) * dt;
+    if (fuelCost > 0 && this.fuel <= 0) {
+      this.thrusting = 0;
+      this.kickTimer = 0;
+      this.stopThrustLoop();
+      this.stopRotateLoop();
+      return;
+    }
+
+    let scale = 1;
+    if (fuelCost > 0 && this.fuel < fuelCost) {
+      scale = this.fuel / fuelCost;
+    }
+
+    if (aimAngle !== null) {
+      this.heading = aimAngle;
+      rotationInput = 0;
+      this.stopRotateLoop();
+    }
+
+    if (rotationInput !== 0) {
+      this.heading += rotationInput * ROT_SPEED * dt * scale;
+      if (thrustInput === 0 && !this.rotateLoopActive) {
+        sounds.startLoop("thrust_rotate", THRUST_LOOP_SEGMENT, THRUST_LOOP_CROSSFADE);
+        this.rotateLoopActive = true;
+      }
+    } else {
+      this.stopRotateLoop();
+    }
+
+    if (thrustInput !== 0) {
+      const fx = Math.sin(this.heading);
+      const fy = -Math.cos(this.heading);
+
+      this.vx += fx * THRUST * thrustInput * dt * scale;
+      this.vy += fy * THRUST * thrustInput * dt * scale;
+      if (!this.thrustLoopActive) {
+        sounds.startLoop("thrust", THRUST_LOOP_SEGMENT, THRUST_LOOP_CROSSFADE);
+        this.thrustLoopActive = true;
+      }
+      if (this.rotateLoopActive) {
+        this.stopRotateLoop();
+      }
+    }
+
+    if (fuelCost > 0) {
+      this.fuel = Math.max(0, this.fuel - fuelCost * scale);
+    }
+
+    const nextThrust = thrustInput * scale;
+    if (nextThrust > 0 && prevThrust <= 0) {
+      this.kickTimer = THRUST_VISUAL.KICK_DURATION;
+    }
+    this.thrusting = nextThrust;
+    if (this.thrusting === 0) {
+      this.stopThrustLoop();
+    }
+  }
+
+  draw(ctx, speed = 0) {
+    // World-space draw (unused for now)
+    this.drawScreen(ctx, this.x, this.y, speed);
+  }
+
+  drawScreen(ctx, sx, sy, speed = 0) {
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(this.heading);
+
+    if (this.thrusting !== 0 || this.kickTimer > 0) {
+      this.drawFlames(ctx, this.thrusting, speed);
+    }
+    if (SHIP_SPRITE.complete && SHIP_SPRITE.naturalWidth > 0) {
+      const scale = SHIP_DRAW_SIZE / SHIP_SPRITE.naturalHeight;
+      const drawW = SHIP_SPRITE.naturalWidth * scale;
+      const drawH = SHIP_SPRITE.naturalHeight * scale;
+      ctx.drawImage(SHIP_SPRITE, -drawW / 2, -drawH / 2, drawW, drawH);
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(0, -12);
+      ctx.lineTo(8, 10);
+      ctx.lineTo(-8, 10);
+      ctx.closePath();
+
+      ctx.fillStyle = "white";
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  drawFlames(ctx, thrusting, speed = 0) {
+    const direction = 1;
+    const baseY = 10;
+    const offsets = [-6, 6];
+    const flicker = 0.8 + Math.random() * 0.4;
+    const thrustPower = Math.min(1, Math.abs(thrusting));
+    const speedRatio = Math.min(1, speed / 520);
+    const kickRatio = THRUST_VISUAL.KICK_DURATION > 0
+      ? Math.min(1, this.kickTimer / THRUST_VISUAL.KICK_DURATION)
+      : 0;
+    const widthScale = 0.8 + thrustPower * 0.6 + kickRatio * 0.5;
+    const flameLen = (8 + thrustPower * 6) * flicker;
+    const outerLen = flameLen * (1.2 + thrustPower * 0.25);
+    const heatLen = outerLen * 1.6;
+    const plumeLen = THRUST_VISUAL.PLUME_BASE
+      + thrustPower * THRUST_VISUAL.PLUME_MAX
+      + speedRatio * THRUST_VISUAL.PLUME_SPEED;
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    if (thrustPower > 0 || kickRatio > 0) {
+      ctx.save();
+      ctx.translate(0, baseY);
+      ctx.scale(1, direction);
+
+      const flareRadius = THRUST_VISUAL.FLARE_RADIUS * (0.6 + thrustPower * 0.6);
+      const flare = ctx.createRadialGradient(0, 2, 0, 0, 2, flareRadius);
+      flare.addColorStop(0, `rgba(120, 200, 190, ${THRUST_VISUAL.FLARE_ALPHA + thrustPower * 0.1})`);
+      flare.addColorStop(1, "rgba(120, 200, 190, 0)");
+      ctx.fillStyle = flare;
+      ctx.beginPath();
+      ctx.arc(0, 2, flareRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (kickRatio > 0) {
+        const kickRadius = THRUST_VISUAL.KICK_RADIUS * (0.8 + kickRatio * 0.7);
+        const kick = ctx.createRadialGradient(0, 0, 0, 0, 0, kickRadius);
+        const kickAlpha = THRUST_VISUAL.KICK_ALPHA * kickRatio;
+        kick.addColorStop(0, `rgba(255, 230, 200, ${kickAlpha})`);
+        kick.addColorStop(1, "rgba(255, 140, 90, 0)");
+        ctx.fillStyle = kick;
+        ctx.beginPath();
+        ctx.arc(0, 0, kickRadius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      const plumeWidth = THRUST_VISUAL.PLUME_WIDTH * widthScale;
+      const plumeGrad = ctx.createLinearGradient(0, 0, 0, plumeLen);
+      plumeGrad.addColorStop(0, `rgba(120, 200, 190, ${0.35 + thrustPower * 0.25})`);
+      plumeGrad.addColorStop(1, "rgba(120, 200, 190, 0)");
+      ctx.fillStyle = plumeGrad;
+      ctx.beginPath();
+      ctx.moveTo(-plumeWidth, 0);
+      ctx.lineTo(plumeWidth, 0);
+      ctx.lineTo(0, plumeLen);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    for (const ox of offsets) {
+      ctx.save();
+      ctx.translate(ox, baseY);
+      ctx.scale(1, direction);
+
+      const time = performance.now();
+      ctx.strokeStyle = `rgba(120, 200, 190, ${0.2 + thrustPower * 0.2})`;
+      ctx.lineWidth = 1;
+      for (let i = 0; i < THRUST_VISUAL.SHIMMER_COUNT; i++) {
+        const offsetX = (i - (THRUST_VISUAL.SHIMMER_COUNT - 1) / 2) * THRUST_VISUAL.SHIMMER_WIDTH;
+        const wave = Math.sin(time * 0.01 + i) * 2;
+        const shimmerLen = heatLen + THRUST_VISUAL.SHIMMER_LENGTH * thrustPower;
+        ctx.beginPath();
+        ctx.moveTo(offsetX, 2);
+        ctx.lineTo(offsetX + wave, shimmerLen);
+        ctx.stroke();
+      }
+
+      const heatGradient = ctx.createLinearGradient(0, 0, 0, heatLen);
+      heatGradient.addColorStop(0, "rgba(255, 200, 140, 0.35)");
+      heatGradient.addColorStop(1, "rgba(255, 120, 60, 0)");
+      ctx.fillStyle = heatGradient;
+      ctx.beginPath();
+      ctx.moveTo(-4 * widthScale, 0);
+      ctx.lineTo(4 * widthScale, 0);
+      ctx.lineTo(0, heatLen);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(255, 140, 60, 0.85)";
+      ctx.beginPath();
+      ctx.moveTo(-2 * widthScale, 0);
+      ctx.lineTo(2 * widthScale, 0);
+      ctx.lineTo(0, outerLen);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(255, 240, 180, 0.9)";
+      ctx.beginPath();
+      ctx.moveTo(-1.2 * widthScale, 0);
+      ctx.lineTo(1.2 * widthScale, 0);
+      ctx.lineTo(0, flameLen);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+}
+window.Ship = Ship;
+})();
+// ===== FILE: src/game/camera.js =====
+(function(){
+"use strict";
+class Camera {
+  constructor(ship) {
+    this.ship = ship;
+    this.zoom = 1;
+    this.shakeX = 0;
+    this.shakeY = 0;
+  }
+
+  applyTransform(ctx, canvas) {
+    ctx.save();
+    ctx.translate(canvas.width / 2 + this.shakeX, canvas.height / 2 + this.shakeY);
+    ctx.scale(this.zoom, this.zoom);
+    ctx.translate(-this.ship.x, -this.ship.y);
+  }
+
+  resetTransform(ctx) {
+    ctx.restore();
+  }
+}
+window.Camera = Camera;
+})();
+// ===== FILE: src/game/sectorManager.js =====
+(function(){
+"use strict";
+
+
+
+
+const SECTOR_SIZE = 6000;
+const STAR = {
+  MASS_MIN: 1200,
+  MASS_MAX: 2200,
+  MARGIN: 400
+};
+const STAR_WELL = {
+  BASE_RADIUS: 630,
+  VARIANCE: 0.2
+};
+const STAR_ROTATION = {
+  YELLOW_MIN: 0.25,
+  YELLOW_MAX: 0.35,
+  RED_MIN: 0.4,
+  RED_MAX: 0.55,
+  BLUE_MIN: 0.6,
+  BLUE_MAX: 0.8
+};
+const STAR_PULSE = {
+  YELLOW_SPEED_MIN: 0.7,
+  YELLOW_SPEED_MAX: 1.0,
+  RED_SPEED_MIN: 0.9,
+  RED_SPEED_MAX: 1.2,
+  BLUE_SPEED_MIN: 1.1,
+  BLUE_SPEED_MAX: 1.5,
+  YELLOW_AMOUNT: 0.05,
+  RED_AMOUNT: 0.08,
+  BLUE_AMOUNT: 0.12
+};
+const STAR_TYPES = {
+  yellow: {
+    id: "yellow",
+    bodyColor: "gold",
+    wellFill: "rgba(255, 255, 200, 0.06)",
+    wellStroke: "rgba(255, 255, 200, 0.2)",
+    minimapColor: "gold",
+    spriteKey: "yellow",
+    wellMultiplier: 1.3,
+    massMultiplier: 2.5
+  },
+  red: {
+    id: "red",
+    bodyColor: "#ff4d4d",
+    wellFill: "rgba(255, 80, 80, 0.06)",
+    wellStroke: "rgba(255, 80, 80, 0.2)",
+    minimapColor: "#ff6b6b",
+    spriteKey: "red",
+    wellMultiplier: 1.0,
+    massMultiplier: 1.0
+  },
+  blue: {
+    id: "blue",
+    bodyColor: "#66ccff",
+    wellFill: "rgba(120, 180, 255, 0.06)",
+    wellStroke: "rgba(120, 180, 255, 0.2)",
+    minimapColor: "#7ad2ff",
+    spriteKey: "blue",
+    wellMultiplier: 1.69,
+    massMultiplier: 4.0
+  }
+};
+const GOAL = {
+  WIDTH: 12,
+  HEIGHT: 24,
+  MARGIN: 300,
+  MIN_SHIP_DIST: 900,
+  MIN_STAR_DIST: 300
+};
+const ASTEROIDS = {
+  COUNT: 12,
+  SPEED_MIN: 5,
+  SPEED_MAX: 120,
+  RADIUS_MIN: 10,
+  RADIUS_MAX: 44,
+  SPAWN_MARGIN: 400
+};
+
+const END_ZONE = {
+  WIDTH: 30,
+  HEIGHT: 16,
+  MARGIN: 120,
+  MIN_GOAL_DIST: 600
+};
+
+function randomRange(rng, min, max) {
+  return min + (max - min) * rng();
+}
+
+function randomInt(rng, min, maxInclusive) {
+  return Math.floor(randomRange(rng, min, maxInclusive + 1));
+}
+
+function randomPointInBounds(rng, bounds, margin) {
+  return {
+    x: randomRange(rng, bounds.x + margin, bounds.x + bounds.size - margin),
+    y: randomRange(rng, bounds.y + margin, bounds.y + bounds.size - margin)
+  };
+}
+
+function applyVariance(value, variance) {
+  const factor = 1 - variance + Math.random() * (variance * 2);
+  return value * factor;
+}
+
+function getStarTypeConfig(typeId) {
+  return STAR_TYPES[typeId] ?? STAR_TYPES.red;
+}
+
+function getStarRotationRange(typeId) {
+  if (typeId === "blue") {
+    return [STAR_ROTATION.BLUE_MIN, STAR_ROTATION.BLUE_MAX];
+  }
+  if (typeId === "red") {
+    return [STAR_ROTATION.RED_MIN, STAR_ROTATION.RED_MAX];
+  }
+  return [STAR_ROTATION.YELLOW_MIN, STAR_ROTATION.YELLOW_MAX];
+}
+
+function getStarPulseConfig(typeId) {
+  if (typeId === "blue") {
+    return {
+      speedMin: STAR_PULSE.BLUE_SPEED_MIN,
+      speedMax: STAR_PULSE.BLUE_SPEED_MAX,
+      amount: STAR_PULSE.BLUE_AMOUNT
+    };
+  }
+  if (typeId === "red") {
+    return {
+      speedMin: STAR_PULSE.RED_SPEED_MIN,
+      speedMax: STAR_PULSE.RED_SPEED_MAX,
+      amount: STAR_PULSE.RED_AMOUNT
+    };
+  }
+  return {
+    speedMin: STAR_PULSE.YELLOW_SPEED_MIN,
+    speedMax: STAR_PULSE.YELLOW_SPEED_MAX,
+    amount: STAR_PULSE.YELLOW_AMOUNT
+  };
+}
+
+const ZONES = {
+  start: { id: "start", asteroidMultiplier: 0.5 },
+  middle: { id: "middle", asteroidMultiplier: 1.0 },
+  outer: { id: "outer", asteroidMultiplier: 1.3 }
+};
+
+function getZoneConfig(ring) {
+  if (ring === 0) {
+    return ZONES.start;
+  }
+  if (ring === 1) {
+    return ZONES.middle;
+  }
+  return ZONES.outer;
+}
+
+function getStarCountsForRing(ring) {
+  if (ring === 0) {
+    return {
+      red: { min: 1, max: 1 },
+      yellow: { min: 0, max: 0 },
+      blue: { min: 0, max: 0 }
+    };
+  }
+  if (ring === 1) {
+    return {
+      red: { min: 1, max: 2 },
+      yellow: { min: 1, max: 2 },
+      blue: { min: 0, max: 0 }
+    };
+  }
+  if (ring === 2) {
+    return {
+      red: { min: 2, max: 3 },
+      yellow: { min: 2, max: 3 },
+      blue: { min: 1, max: 1 }
+    };
+  }
+  return {
+    red: { min: ring, max: ring + 1 },
+    yellow: { min: ring, max: ring + 1 },
+    blue: { min: ring - 2, max: ring - 1 }
+  };
+}
+
+function generateStars(rng, bounds, ring, safePoint, safeRadius) {
+  const stars = [];
+  const counts = getStarCountsForRing(ring);
+  const entries = [
+    {
+      type: "red",
+      count: randomInt(rng, counts.red.min, counts.red.max)
+    },
+    {
+      type: "yellow",
+      count: randomInt(rng, counts.yellow.min, counts.yellow.max)
+    },
+    {
+      type: "blue",
+      count: randomInt(rng, counts.blue.min, counts.blue.max)
+    }
+  ];
+
+  for (const entry of entries) {
+    const type = getStarTypeConfig(entry.type);
+    for (let i = 0; i < entry.count; i++) {
+      const baseMass = randomRange(rng, STAR.MASS_MIN, STAR.MASS_MAX);
+      const mass = applyVariance(baseMass * type.massMultiplier, STAR_WELL.VARIANCE);
+      const gravityRadius = applyVariance(
+        STAR_WELL.BASE_RADIUS * type.wellMultiplier,
+        STAR_WELL.VARIANCE
+      );
+      const [rotMin, rotMax] = getStarRotationRange(type.id);
+      const rotSpeed = randomRange(rng, rotMin, rotMax) * (rng() < 0.5 ? -1 : 1);
+      const pulseCfg = getStarPulseConfig(type.id);
+      const pulseSpeed = randomRange(rng, pulseCfg.speedMin, pulseCfg.speedMax);
+      const pulseAmount = pulseCfg.amount;
+
+      let pos = randomPointInBounds(rng, bounds, STAR.MARGIN);
+      for (let tries = 0; tries < 30; tries++) {
+        if (!safePoint) {
+          break;
+        }
+        const dx = pos.x - safePoint.x;
+        const dy = pos.y - safePoint.y;
+        const minDist = Math.max(safeRadius, gravityRadius + 200);
+        if (Math.hypot(dx, dy) >= minDist) {
+          break;
+        }
+        pos = randomPointInBounds(rng, bounds, STAR.MARGIN);
+      }
+
+      stars.push(new Star(pos.x, pos.y, {
+        mass,
+        gravityRadius,
+        bodyColor: type.bodyColor,
+        wellFill: type.wellFill,
+        wellStroke: type.wellStroke,
+        minimapColor: type.minimapColor,
+        spriteKey: type.spriteKey,
+        rotationSpeed: rotSpeed,
+        pulseSpeed,
+        pulseAmount
+      }));
+    }
+  }
+  return stars;
+}
+
+function generateEndZone(rng, bounds, goalX, goalY) {
+  const edges = ["north", "south", "west", "east"];
+  let zone = null;
+
+  for (let i = 0; i < 12; i++) {
+    const edge = edges[randomInt(rng, 0, edges.length - 1)];
+    let x = bounds.x + END_ZONE.MARGIN;
+    let y = bounds.y + END_ZONE.MARGIN;
+
+    if (edge == "north") {
+      x = randomRange(rng, bounds.x + END_ZONE.MARGIN, bounds.x + bounds.size - END_ZONE.MARGIN - END_ZONE.WIDTH);
+      y = bounds.y + END_ZONE.MARGIN;
+    } else if (edge == "south") {
+      x = randomRange(rng, bounds.x + END_ZONE.MARGIN, bounds.x + bounds.size - END_ZONE.MARGIN - END_ZONE.WIDTH);
+      y = bounds.y + bounds.size - END_ZONE.MARGIN - END_ZONE.HEIGHT;
+    } else if (edge == "west") {
+      x = bounds.x + END_ZONE.MARGIN;
+      y = randomRange(rng, bounds.y + END_ZONE.MARGIN, bounds.y + bounds.size - END_ZONE.MARGIN - END_ZONE.HEIGHT);
+    } else {
+      x = bounds.x + bounds.size - END_ZONE.MARGIN - END_ZONE.WIDTH;
+      y = randomRange(rng, bounds.y + END_ZONE.MARGIN, bounds.y + bounds.size - END_ZONE.MARGIN - END_ZONE.HEIGHT);
+    }
+
+    const dx = x - goalX;
+    const dy = y - goalY;
+    if (Math.hypot(dx, dy) < END_ZONE.MIN_GOAL_DIST) {
+      continue;
+    }
+
+    zone = new EndZone(x, y, END_ZONE.WIDTH, END_ZONE.HEIGHT);
+    break;
+  }
+
+  if (!zone) {
+    zone = new EndZone(
+      bounds.x + bounds.size - END_ZONE.MARGIN - END_ZONE.WIDTH,
+      bounds.y + bounds.size - END_ZONE.MARGIN - END_ZONE.HEIGHT,
+      END_ZONE.WIDTH,
+      END_ZONE.HEIGHT
+    );
+  }
+
+  return zone;
+}
+
+function generateGoal(rng, bounds, shipX, shipY, stars) {
+  let goalX = bounds.x + bounds.size / 2 - GOAL.WIDTH / 2;
+  let goalY = bounds.y + bounds.size / 2 - GOAL.HEIGHT / 2;
+
+  for (let i = 0; i < 20; i++) {
+    const pos = randomPointInBounds(rng, bounds, GOAL.MARGIN);
+    const gx = pos.x;
+    const gy = pos.y;
+
+    const shipDx = gx - shipX;
+    const shipDy = gy - shipY;
+    if (Math.hypot(shipDx, shipDy) < GOAL.MIN_SHIP_DIST) {
+      continue;
+    }
+
+    let tooClose = false;
+    for (const star of stars) {
+      const dx = gx - star.x;
+      const dy = gy - star.y;
+      if (Math.hypot(dx, dy) < GOAL.MIN_STAR_DIST) {
+        tooClose = true;
+        break;
+      }
+    }
+    if (tooClose) {
+      continue;
+    }
+
+    goalX = gx;
+    goalY = gy;
+    break;
+  }
+
+  return new Goal(goalX, goalY, GOAL.WIDTH, GOAL.HEIGHT);
+}
+
+function generateAsteroids(rng, bounds, shipX, shipY, viewRadius, asteroidMultiplier, safePoint, safeRadius) {
+  const asteroids = [];
+  const count = Math.max(1, Math.round(ASTEROIDS.COUNT * asteroidMultiplier));
+  for (let i = 0; i < count; i++) {
+    let pos = null;
+    let vx = 0;
+    let vy = 0;
+    for (let tries = 0; tries < 40; tries++) {
+      const candidate = randomPointInBounds(rng, bounds, ASTEROIDS.SPAWN_MARGIN);
+      const dx = candidate.x - shipX;
+      const dy = candidate.y - shipY;
+      const minSpawnDist = viewRadius + ASTEROIDS.SPAWN_MARGIN;
+      if (Math.hypot(dx, dy) < minSpawnDist) {
+        continue;
+      }
+
+      const travelAngle = randomRange(rng, 0, Math.PI * 2);
+      const speed = randomRange(rng, ASTEROIDS.SPEED_MIN, ASTEROIDS.SPEED_MAX);
+      const testVx = Math.cos(travelAngle) * speed;
+      const testVy = Math.sin(travelAngle) * speed;
+
+      if (safePoint) {
+        const sx = safePoint.x - candidate.x;
+        const sy = safePoint.y - candidate.y;
+        const dist = Math.hypot(sx, sy);
+        if (dist < safeRadius) {
+          continue;
+        }
+        const dot = testVx * sx + testVy * sy;
+        const cos = dist > 0 ? dot / (speed * dist) : 0;
+        if (cos > 0.7) {
+          continue;
+        }
+      }
+
+      pos = candidate;
+      vx = testVx;
+      vy = testVy;
+      break;
+    }
+
+    if (!pos) {
+      pos = randomPointInBounds(rng, bounds, ASTEROIDS.SPAWN_MARGIN);
+      const travelAngle = randomRange(rng, 0, Math.PI * 2);
+      const speed = randomRange(rng, ASTEROIDS.SPEED_MIN, ASTEROIDS.SPEED_MAX);
+      vx = Math.cos(travelAngle) * speed;
+      vy = Math.sin(travelAngle) * speed;
+    }
+
+    const radius = randomRange(rng, ASTEROIDS.RADIUS_MIN, ASTEROIDS.RADIUS_MAX);
+
+    asteroids.push(new Asteroid(pos.x, pos.y, vx, vy, radius));
+  }
+  return asteroids;
+}
+
+class SectorManager {
+  constructor(safePoint = null, safeRadius = 0) {
+    this.current = null;
+    this.sectors = new Map();
+    this.safePoint = safePoint;
+    this.safeRadius = safeRadius;
+  }
+
+  getSectorAt(sx, sy, viewRadius, shipX, shipY) {
+    const key = `${sx},${sy}`;
+    if (this.sectors.has(key)) {
+      return this.sectors.get(key);
+    }
+
+    const rng = Math.random;
+    const ring = Math.max(Math.abs(sx), Math.abs(sy));
+    const bounds = {
+      x: sx * SECTOR_SIZE,
+      y: sy * SECTOR_SIZE,
+      size: SECTOR_SIZE
+    };
+    const zone = getZoneConfig(ring);
+    const useSafePoint = (ring === 0) ? this.safePoint : null;
+    const safeRadius = (ring === 0) ? this.safeRadius : 0;
+    const stars = generateStars(rng, bounds, ring, useSafePoint, safeRadius);
+    const goal = generateGoal(rng, bounds, shipX, shipY, stars);
+    const endZone = generateEndZone(rng, bounds, goal.x, goal.y);
+    const asteroids = generateAsteroids(
+      rng,
+      bounds,
+      shipX,
+      shipY,
+      viewRadius,
+      zone.asteroidMultiplier,
+      useSafePoint,
+      safeRadius
+    );
+
+    const sector = {
+      sx,
+      sy,
+      bounds,
+      zone: zone.id,
+      stars,
+      goal,
+      endZone,
+      asteroids,
+      goalCollected: true,
+      goalDelivered: false
+    };
+    this.sectors.set(key, sector);
+    return sector;
+  }
+
+  getSectorForPosition(x, y, viewRadius, shipX, shipY) {
+    const sx = Math.floor(x / SECTOR_SIZE);
+    const sy = Math.floor(y / SECTOR_SIZE);
+    this.current = this.getSectorAt(sx, sy, viewRadius, shipX, shipY);
+    return this.current;
+  }
+
+  getSectorsAround(x, y, viewRadius, shipX, shipY, range = 1) {
+    const sx = Math.floor(x / SECTOR_SIZE);
+    const sy = Math.floor(y / SECTOR_SIZE);
+    const sectors = [];
+    for (let dx = -range; dx <= range; dx++) {
+      for (let dy = -range; dy <= range; dy++) {
+        sectors.push(this.getSectorAt(sx + dx, sy + dy, viewRadius, shipX, shipY));
+      }
+    }
+    return sectors;
+  }
+}
+window.SectorManager = SectorManager;
+window.SECTOR_SIZE = SECTOR_SIZE;
+})();
+// ===== FILE: src/ui/startScreen.js =====
+(function(){
+"use strict";
+
+function showStartScreen(root, onStart) {
+  if (!root) {
+    return null;
+  }
+
+  sounds.preload();
+
+  const overlay = document.createElement("div");
+  overlay.className = "overlay start-screen";
+
+  const panel = document.createElement("div");
+  panel.className = "start-panel";
+
+  const title = document.createElement("div");
+  title.className = "start-title";
+  title.textContent = "Space Surveyor";
+
+  const subtitle = document.createElement("div");
+  subtitle.className = "start-subtitle";
+  subtitle.textContent = "";
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "start-button start-capsule";
+  button.textContent = "Press Space to Start";
+
+  const blurb = document.createElement("div");
+  blurb.className = "start-blurb";
+  blurb.textContent = "Conserve fuel. Survey unknown systems. Chart your legacy.";
+
+  const carousel = document.createElement("div");
+  carousel.className = "start-carousel";
+
+  const slides = [];
+  const addSlide = (content) => {
+    const slide = document.createElement("div");
+    slide.className = "start-slide";
+    slide.appendChild(content);
+    carousel.appendChild(slide);
+    slides.push(slide);
+  };
+
+  const controls = document.createElement("div");
+  controls.className = "start-card start-controls";
+  const controlsTitle = document.createElement("div");
+  controlsTitle.className = "start-controls-title";
+  controlsTitle.textContent = "Flight Controls";
+  const controlsList = document.createElement("div");
+  controlsList.className = "start-controls-list";
+  const controlEntries = [
+    { keys: "WASD / ARROWS", desc: "Steer and thrust" },
+    { keys: "M", desc: "Toggle mouse aim" },
+    { keys: "MOUSE", desc: "Aim / LMB fire / RMB thrust" },
+    { keys: "Z / X", desc: "Zoom Camera out / in" },
+    { keys: "Q (OUT OF FUEL)", desc: "Terminate when stranded" },
+    { keys: "ESC", desc: "Return to start" }
+  ];
+  for (const entry of controlEntries) {
+    const row = document.createElement("div");
+    row.className = "start-controls-item";
+    const keys = document.createElement("div");
+    keys.className = "start-controls-keys";
+    keys.textContent = entry.keys;
+    const desc = document.createElement("div");
+    desc.className = "start-controls-desc";
+    desc.textContent = entry.desc;
+    row.appendChild(keys);
+    row.appendChild(desc);
+    controlsList.appendChild(row);
+  }
+  controls.appendChild(controlsTitle);
+  controls.appendChild(controlsList);
+  addSlide(controls);
+
+  const legend = document.createElement("div");
+  legend.className = "start-card start-legend";
+  const legendTitle = document.createElement("div");
+  legendTitle.className = "start-legend-title";
+  legendTitle.textContent = "Field Legend";
+  legend.appendChild(legendTitle);
+
+  const legendList = document.createElement("div");
+  legendList.className = "start-legend-list";
+  const legendEntries = [
+    {
+      icon: "ship",
+      name: "Player - Surveyor Class",
+      desc: "Pilot this craft. Dodge hazards, deliver surveys."
+    },
+    {
+      icon: "star",
+      name: "Stars - Gravity Wells",
+      desc: "Pull you in. Avoid the core."
+    },
+    {
+      icon: "asteroid",
+      name: "Asteroids - Drift Rocks",
+      desc: "Shoot for points. Fragments still hurt."
+    },
+    {
+      icon: "enemy",
+      name: "Enemy Ships - Raiders",
+      desc: "Hunt you down. Take them out for bonus."
+    },
+    {
+      icon: "fuel",
+      name: "Fuel - Charge Pods",
+      desc: "Refill tank to keep thrusting."
+    },
+    {
+      icon: "survey",
+      name: "Survey Sites - Drop Zones",
+      desc: "Deliver surveys to score and advance."
+    }
+  ];
+
+  for (const entry of legendEntries) {
+    const item = document.createElement("div");
+    item.className = "start-legend-item";
+
+    const icon = document.createElement("div");
+    icon.className = `start-legend-icon legend-${entry.icon}`;
+
+    const text = document.createElement("div");
+    text.className = "start-legend-text";
+
+    const name = document.createElement("div");
+    name.className = "start-legend-name";
+    name.textContent = entry.name;
+
+    const desc = document.createElement("div");
+    desc.className = "start-legend-desc";
+    desc.textContent = entry.desc;
+
+    text.appendChild(name);
+    text.appendChild(desc);
+    item.appendChild(icon);
+    item.appendChild(text);
+    legendList.appendChild(item);
+  }
+  legend.appendChild(legendList);
+  addSlide(legend);
+
+  const scores = document.createElement("div");
+  scores.className = "start-card start-scores";
+  const scoresTitle = document.createElement("div");
+  scoresTitle.className = "start-scores-title";
+  scoresTitle.textContent = "High Scores";
+  const scoresList = document.createElement("div");
+  scoresList.className = "start-scores-list";
+  const defaultScores = [
+    { name: "WINGTIP", score: 75000 },
+    { name: "WINGTIP", score: 52000 },
+    { name: "WINGTIP", score: 37000 },
+    { name: "WINGTIP", score: 23300 },
+    { name: "WINGTIP", score: 12500 },
+    { name: "WINGTIP", score: 5900 },
+    { name: "WINGTIP", score: 3800 },
+    { name: "WINGTIP", score: 1400 },
+    { name: "WINGTIP", score: 600 },
+    { name: "WINGTIP", score: 100 }
+  ];
+
+  const renderScores = (entries) => {
+    scoresList.innerHTML = "";
+    const list = Array.isArray(entries) ? entries.slice(0, 10) : [];
+    const padded = list.length ? list.slice() : defaultScores.slice(0, 10);
+    while (padded.length < 10) {
+      padded.push({ name: "---", score: 0 });
+    }
+
+    padded.forEach((entry, index) => {
+      const row = document.createElement("div");
+      row.className = "start-scores-row";
+      const rank = document.createElement("div");
+      rank.className = "start-scores-rank";
+      rank.textContent = `${index + 1}.`;
+      const name = document.createElement("div");
+      name.className = "start-scores-name";
+      name.textContent = entry.name || "---";
+      const value = document.createElement("div");
+      value.className = "start-scores-value";
+      const numericScore = Number(entry.score);
+      value.textContent = Number.isFinite(numericScore)
+        ? numericScore.toLocaleString("en-US")
+        : "0";
+      row.appendChild(rank);
+      row.appendChild(name);
+      row.appendChild(value);
+      scoresList.appendChild(row);
+    });
+  };
+
+  renderScores(defaultScores);
+  scores.appendChild(scoresTitle);
+  scores.appendChild(scoresList);
+  addSlide(scores);
+
+  const loadScores = async () => {
+    try {
+      const res = await fetch("/api/score/");
+      if (!res.ok) {
+        throw new Error("fetch failed");
+      }
+      const data = await res.json();
+      renderScores(data);
+    } catch (err) {
+      renderScores([]);
+    }
+  };
+
+  loadScores();
+
+  let slideIndex = 0;
+  slides[slideIndex].classList.add("is-active");
+  const slideTimer = setInterval(() => {
+    slides[slideIndex].classList.remove("is-active");
+    slideIndex = (slideIndex + 1) % slides.length;
+    slides[slideIndex].classList.add("is-active");
+  }, 6000);
+
+  panel.appendChild(title);
+  panel.appendChild(subtitle);
+  panel.appendChild(carousel);
+  panel.appendChild(button);
+  panel.appendChild(blurb);
+  overlay.appendChild(panel);
+  root.appendChild(overlay);
+
+  const bgLayer = document.createElement("div");
+  bgLayer.className = "start-bg-layer";
+  overlay.appendChild(bgLayer);
+
+  const credit = document.createElement("div");
+  credit.className = "start-credit";
+  credit.innerHTML = 'a game by <span class="start-subtitle-name">Jared Menard</span> &middot; All Rights Reserved';
+  overlay.appendChild(credit);
+
+  const bgObjects = createBackgroundObjects(bgLayer, 6, 4);
+
+  let started = false;
+  const start = () => {
+    if (started) {
+      return;
+    }
+    started = true;
+    sounds.play("start_game");
+    cleanup();
+    if (onStart) {
+      onStart();
+    }
+  };
+
+  const onKeyDown = (event) => {
+    if (event.code === "Space") {
+      event.preventDefault();
+      start();
+    }
+  };
+
+  button.addEventListener("click", start);
+  window.addEventListener("keydown", onKeyDown);
+
+  function cleanup() {
+    window.removeEventListener("keydown", onKeyDown);
+    button.removeEventListener("click", start);
+    for (const obj of bgObjects) {
+      obj.stop();
+    }
+    clearInterval(slideTimer);
+    overlay.remove();
+  }
+
+  return {
+    destroy: cleanup,
+    start
+  };
+}
+
+function createBackgroundObjects(layer, starCount, asteroidCount) {
+  const objects = [];
+  const addObject = (className, sizeRange, speedRange) => {
+    const el = document.createElement("div");
+    el.className = `start-bg-object ${className}`;
+    const size = sizeRange[0] + Math.random() * (sizeRange[1] - sizeRange[0]);
+    const startX = Math.random() * 120 - 10;
+    const startY = Math.random() * 120 - 10;
+    el.style.width = `${size}px`;
+    el.style.height = `${size}px`;
+    el.style.left = `${startX}%`;
+    el.style.top = `${startY}%`;
+    layer.appendChild(el);
+
+    let angle = Math.random() * Math.PI * 2;
+    let speed = speedRange[0] + Math.random() * (speedRange[1] - speedRange[0]);
+    let driftX = Math.cos(angle) * speed;
+    let driftY = Math.sin(angle) * speed;
+    let translateX = 0;
+    let translateY = 0;
+    let lastTime = performance.now();
+    let raf = 0;
+
+    const step = (time) => {
+      const dt = Math.min((time - lastTime) / 1000, 0.05);
+      lastTime = time;
+      translateX += driftX * dt;
+      translateY += driftY * dt;
+
+      if (translateX > 140 || translateX < -140) {
+        driftX *= -1;
+      }
+      if (translateY > 140 || translateY < -140) {
+        driftY *= -1;
+      }
+
+      el.style.transform = `translate(${translateX}px, ${translateY}px)`;
+      raf = requestAnimationFrame(step);
+    };
+
+    raf = requestAnimationFrame(step);
+
+    return {
+      stop: () => cancelAnimationFrame(raf)
+    };
+  };
+
+  for (let i = 0; i < starCount; i++) {
+    objects.push(addObject("bg-star", [6, 16], [6, 14]));
+  }
+  for (let i = 0; i < asteroidCount; i++) {
+    objects.push(addObject("bg-asteroid", [10, 22], [4, 9]));
+  }
+
+  return objects;
+}
+window.showStartScreen = showStartScreen;
+})();
+// ===== FILE: src/ui/gameoverModal.js =====
+(function(){
+"use strict";
+const SCORE_ENDPOINT = "/api/score/";
+const MIN_QUALIFY_SCORE = 100;
+const NAME_MAX_LENGTH = 12;
+
+function qualifies(score, scores) {
+  if (score < MIN_QUALIFY_SCORE) {
+    return false;
+  }
+  if (!Array.isArray(scores) || scores.length < 10) {
+    return true;
+  }
+  const tenth = scores[9]?.score ?? 0;
+  return score >= tenth;
+}
+
+function sanitizeName(value) {
+  return value
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]/g, "")
+    .slice(0, NAME_MAX_LENGTH);
+}
+
+function renderLeaderboard(scores) {
+  const wrap = document.createElement("div");
+  wrap.className = "leaderboard-wrap";
+
+  const title = document.createElement("div");
+  title.className = "leaderboard-title";
+  title.textContent = "High Scores";
+  wrap.appendChild(title);
+
+  const list = document.createElement("div");
+  list.className = "leaderboard-list";
+
+  const entries = Array.isArray(scores) ? scores.slice(0, 10) : [];
+  const padded = entries.slice();
+  while (padded.length < 10) {
+    padded.push({ name: "---", score: 0 });
+  }
+
+  padded.forEach((entry, index) => {
+    const row = document.createElement("div");
+    row.className = "leaderboard-row";
+    if (entry.isNew) {
+      row.classList.add("is-new");
+    }
+
+    const rank = document.createElement("div");
+    rank.className = "leaderboard-rank";
+    rank.textContent = `${index + 1}.`;
+
+    const name = document.createElement("div");
+    name.className = "leaderboard-name";
+    name.textContent = entry.name || "---";
+
+    const value = document.createElement("div");
+    value.className = "leaderboard-score";
+    const numericScore = Number(entry.score);
+    value.textContent = Number.isFinite(numericScore)
+      ? numericScore.toLocaleString("en-US")
+      : "0";
+
+    row.appendChild(rank);
+    row.appendChild(name);
+    row.appendChild(value);
+    list.appendChild(row);
+  });
+
+  wrap.appendChild(list);
+  return wrap;
+}
+
+function showGameOverModal(root, stats, onClose) {
+  if (!root) {
+    return null;
+  }
+
+  const overlay = document.createElement("div");
+  overlay.className = "overlay gameover-modal";
+
+  const panel = document.createElement("div");
+  panel.className = "gameover-panel";
+
+  const title = document.createElement("div");
+  title.className = "gameover-title";
+  title.textContent = "Game Over";
+
+  const subtitle = document.createElement("div");
+  subtitle.className = "gameover-subtitle";
+  subtitle.textContent = "Loading leaderboard...";
+
+  panel.appendChild(title);
+  if (stats) {
+    const statsWrap = document.createElement("div");
+    statsWrap.className = "gameover-stats";
+
+    const scoreLine = document.createElement("div");
+    scoreLine.textContent = `Score: ${Math.round(stats.score || 0)}`;
+
+    const distanceLine = document.createElement("div");
+    const distance = Math.round(stats.distanceTraveled || 0);
+    distanceLine.textContent = `Distance: ${distance}u`;
+
+    const timeLine = document.createElement("div");
+    const time = (stats.timeSpent || 0).toFixed(1);
+    timeLine.textContent = `Time: ${time}s`;
+
+    const surveyedLine = document.createElement("div");
+    surveyedLine.textContent = `Surveyed: ${stats.surveyed || 0}`;
+
+    statsWrap.appendChild(scoreLine);
+    statsWrap.appendChild(distanceLine);
+    statsWrap.appendChild(timeLine);
+    statsWrap.appendChild(surveyedLine);
+    panel.appendChild(statsWrap);
+  }
+  const content = document.createElement("div");
+  content.className = "gameover-content";
+
+  panel.appendChild(subtitle);
+  panel.appendChild(content);
+  overlay.appendChild(panel);
+  root.appendChild(overlay);
+
+  let closed = false;
+  let canClose = true;
+  const close = () => {
+    if (closed || !canClose) {
+      return;
+    }
+    closed = true;
+    cleanup();
+    if (onClose) {
+      onClose();
+    }
+  };
+
+  const onKeyDown = (event) => {
+    if (canClose) {
+      event.preventDefault();
+      close();
+    }
+  };
+
+  overlay.addEventListener("pointerdown", close);
+  window.addEventListener("keydown", onKeyDown);
+
+  const finalScore = Math.round(stats?.score || 0);
+
+  const showError = (message) => {
+    subtitle.textContent = message;
+    canClose = true;
+  };
+
+  const showLeaderboard = (scores) => {
+    content.innerHTML = "";
+    content.appendChild(renderLeaderboard(scores));
+    subtitle.textContent = "Press any key to return";
+    canClose = true;
+  };
+
+  const showEntryForm = (scores) => {
+    canClose = false;
+    subtitle.textContent = "New High Score!";
+    content.innerHTML = "";
+
+    const entryWrap = document.createElement("div");
+    entryWrap.className = "score-entry";
+
+    const label = document.createElement("div");
+    label.className = "score-entry-label";
+    label.textContent = "Enter Callsign";
+
+    const input = document.createElement("input");
+    input.className = "score-entry-input";
+    input.type = "text";
+    input.maxLength = NAME_MAX_LENGTH;
+    input.placeholder = "AAA";
+    input.value = "";
+
+    input.addEventListener("input", () => {
+      input.value = sanitizeName(input.value);
+    });
+
+    const actions = document.createElement("div");
+    actions.className = "score-entry-actions";
+
+    const submit = document.createElement("button");
+    submit.type = "button";
+    submit.className = "score-entry-button";
+    submit.textContent = "OK";
+
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "score-entry-button ghost";
+    cancel.textContent = "Cancel";
+
+    actions.appendChild(submit);
+    actions.appendChild(cancel);
+
+    entryWrap.appendChild(label);
+    entryWrap.appendChild(input);
+    entryWrap.appendChild(actions);
+    content.appendChild(entryWrap);
+    content.appendChild(renderLeaderboard(scores));
+
+    input.focus();
+
+    const submitScore = async () => {
+      const name = sanitizeName(input.value) || "ANON";
+      submit.disabled = true;
+      cancel.disabled = true;
+      try {
+        const res = await fetch(SCORE_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, score: finalScore })
+        });
+        if (!res.ok) {
+          throw new Error("submit failed");
+        }
+      } catch (err) {
+        showError("Score submission failed");
+        return;
+      }
+
+      let updated = [];
+      try {
+        const res = await fetch(SCORE_ENDPOINT);
+        if (res.ok) {
+          updated = await res.json();
+        }
+      } catch (err) {
+        showError("Score submission failed");
+        return;
+      }
+
+      const highlight = updated.map((entry) => ({ ...entry }));
+      const matchIndex = highlight.findIndex(
+        (entry) => entry.name === name && entry.score === finalScore
+      );
+      if (matchIndex >= 0) {
+        highlight[matchIndex] = { ...highlight[matchIndex], isNew: true };
+      }
+      showLeaderboard(highlight);
+    };
+
+    submit.addEventListener("click", submitScore);
+    cancel.addEventListener("click", () => {
+      showLeaderboard(scores);
+    });
+  };
+
+  const loadLeaderboard = async () => {
+    if (finalScore < MIN_QUALIFY_SCORE) {
+      subtitle.textContent = `Score below ${MIN_QUALIFY_SCORE}. Press any key to return`;
+      content.innerHTML = "";
+      canClose = true;
+      return;
+    }
+
+    let scores = [];
+    try {
+      const res = await fetch(SCORE_ENDPOINT);
+      if (!res.ok) {
+        throw new Error("fetch failed");
+      }
+      scores = await res.json();
+    } catch (err) {
+      showError("Leaderboard unavailable");
+      return;
+    }
+
+    if (qualifies(finalScore, scores)) {
+      showEntryForm(scores);
+    } else {
+      showLeaderboard(scores);
+    }
+  };
+
+  loadLeaderboard();
+
+  function cleanup() {
+    overlay.removeEventListener("pointerdown", close);
+    window.removeEventListener("keydown", onKeyDown);
+    overlay.remove();
+  }
+
+  return {
+    destroy: cleanup,
+    close
+  };
+}
+window.showGameOverModal = showGameOverModal;
+})();
+// ===== FILE: src/ui/levelCompleteModal.js =====
+(function(){
+"use strict";
+function showLevelCompleteModal(root, onClose) {
+  if (!root) {
+    return null;
+  }
+
+  const overlay = document.createElement("div");
+  overlay.className = "overlay level-complete-modal";
+
+  const panel = document.createElement("div");
+  panel.className = "level-complete-panel";
+
+  const title = document.createElement("div");
+  title.className = "level-complete-title";
+  title.textContent = "Level Complete";
+
+  const subtitle = document.createElement("div");
+  subtitle.className = "level-complete-subtitle";
+  subtitle.textContent = "Press any key to return";
+
+  panel.appendChild(title);
+  panel.appendChild(subtitle);
+  overlay.appendChild(panel);
+  root.appendChild(overlay);
+
+  let closed = false;
+  const close = () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    cleanup();
+    if (onClose) {
+      onClose();
+    }
+  };
+
+  const onKeyDown = (event) => {
+    event.preventDefault();
+    close();
+  };
+
+  overlay.addEventListener("pointerdown", close);
+  window.addEventListener("keydown", onKeyDown);
+
+  function cleanup() {
+    overlay.removeEventListener("pointerdown", close);
+    window.removeEventListener("keydown", onKeyDown);
+    overlay.remove();
+  }
+
+  return {
+    destroy: cleanup,
+    close
+  };
+}
+window.showLevelCompleteModal = showLevelCompleteModal;
+})();
+// ===== FILE: src/game/gameLoop.js =====
+(function(){
+"use strict";
+
+
+
+
+
+
 
 const DEBUG = {
   VECTORS: true
@@ -560,7 +2696,7 @@ function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, scree
 }
 
 
-export function startGame(canvas, ctx, onGameOver) {
+function startGame(canvas, ctx, onGameOver) {
   sounds.preload();
   music.start();
   const startX = SECTOR_SIZE / 2;
@@ -2508,3 +4644,65 @@ function spawnEnemyChunks(enemy) {
     exitToMenu
   };
 }
+window.startGame = startGame;
+})();
+// ===== FILE: src/main.js =====
+(function(){
+"use strict";
+
+
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener("resize", resize);
+resize();
+
+const uiRoot = document.getElementById("ui-root");
+let gameController = null;
+let escListener = null;
+
+function beginGame() {
+  if (escListener) {
+    window.removeEventListener("keydown", escListener);
+    escListener = null;
+  }
+  gameController = startGame(canvas, ctx, (stats) => {
+    if (escListener) {
+      window.removeEventListener("keydown", escListener);
+      escListener = null;
+    }
+    gameController = null;
+    showGameOverModal(uiRoot, stats, () => {
+      showStartScreen(uiRoot, beginGame);
+    });
+  });
+
+  escListener = (event) => {
+    if (event.code !== "Escape") {
+      return;
+    }
+    event.preventDefault();
+    if (!gameController) {
+      return;
+    }
+    const controller = gameController;
+    gameController = null;
+    if (escListener) {
+      window.removeEventListener("keydown", escListener);
+      escListener = null;
+    }
+    if (typeof controller.exitToMenu === "function") {
+      controller.exitToMenu();
+    }
+    showStartScreen(uiRoot, beginGame);
+  };
+  window.addEventListener("keydown", escListener);
+}
+
+showStartScreen(uiRoot, beginGame);
+})();

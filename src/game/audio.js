@@ -1,7 +1,7 @@
 const SOUND_DEFS = {
   start_game: { src: "assets/sounds/mp3/start_game.mp3", volume: 0.9 },
-  laser: { src: "assets/sounds/mp3/laser.mp3", volume: 0.75 },
-  enemy_laser: { src: "assets/sounds/mp3/laser.mp3", volume: 0.375 },
+  laser: { src: "assets/sounds/mp3/laser.mp3", volume: 0.375 },
+  enemy_laser: { src: "assets/sounds/mp3/laser.mp3", volume: 0.1875 },
   explosion: { src: "assets/sounds/mp3/explosion.mp3", volume: 0.85 },
   lost_life: { src: "assets/sounds/mp3/lost_life.mp3", volume: 0.9 },
   got_fuel: { src: "assets/sounds/mp3/got_fuel.mp3", volume: 0.8 },

@@ -10,6 +10,14 @@ Space Surveyor is a retro-inspired space exploration and combat game. Pilot a su
 - HUD with compass, minimap, fuel gauge, and score effects.
 - Top-10 leaderboard backed by a PHP + MySQL API.
 
+## Recent Updates
+
+- Difficulty scaling is now ring-based: ring 0 has 1 red star, ring 1 has 1-2 red + 1-2 yellow, ring 2 has 2-3 red + 2-3 yellow + 1 blue, and ring 3+ scales linearly (red/yellow: ring..ring+1, blue: ring-2..ring-1).
+- Ship bearings now use glowing chevron pairs for the nearest scan points, plus faint fuel bearings around the ship.
+- Alerts now include a start-of-game prompt, scan completion refuels the tank and inserts "Fuel tanks refilled!" before the enemy alert.
+- Fuel/score tuning: max fuel doubled, fuel pickups refill full tank (ratio 1.0), rotation no longer consumes fuel, and survey score doubled.
+- Visual polish: deep space noir UI theme, parallax dust, star halos, particle bloom, engine heat shimmer, speed-based trail coloring, and subtle screen shake on impacts/surveys.
+
 ## Controls
 
 - Movement: WASD or Arrow keys
@@ -92,6 +100,12 @@ Open:
 - `http://localhost:8000/api/score/` (API)
 
 Note: some PHP setups require the trailing slash for directory index resolution.
+
+## Deployment
+
+- Run the build: `node tools/build.js`
+- Upload: `dist/index.html` and `dist/game.js` (plus `assets/` only if assets changed)
+- Do not upload: `src/` or `tools/` for code-only updates
 
 ## API Endpoints
 
