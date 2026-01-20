@@ -2288,6 +2288,20 @@ const BACKGROUND_SLICE = {
   PARALLAX: 0.01,
   ARC: Math.PI * 1.1
 };
+const BACKGROUND_EVENTS = {
+  MIN_INTERVAL: 3.5,
+  MAX_INTERVAL: 7.5,
+  MAX_ACTIVE: 5,
+  EDGE_MARGIN: 80
+};
+const PSYCHE_PALETTE = [
+  [255, 80, 220],
+  [80, 240, 255],
+  [200, 255, 90],
+  [255, 150, 60],
+  [160, 90, 255],
+  [255, 90, 140]
+];
 const NEBULA = {
   ALPHA: 0.2,
   ROT_SPEED: 0.00003,
@@ -2457,6 +2471,21 @@ function getViewRadius(canvas, camera) {
   return (Math.hypot(canvas.width, canvas.height) / 2) / camera.zoom;
 }
 
+function randomRange(min, max) {
+  return min + Math.random() * (max - min);
+}
+
+function pickPsycheColor() {
+  return PSYCHE_PALETTE[Math.floor(Math.random() * PSYCHE_PALETTE.length)];
+}
+
+function rgba(color, alpha, scale = 1) {
+  const r = Math.max(0, Math.min(255, Math.round(color[0] * scale)));
+  const g = Math.max(0, Math.min(255, Math.round(color[1] * scale)));
+  const b = Math.max(0, Math.min(255, Math.round(color[2] * scale)));
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 function createStarfield(width, height, config = STARFIELD) {
   const offscreen = document.createElement("canvas");
   offscreen.width = width;
@@ -2499,8 +2528,9 @@ function createRotatingSlice(size, config = BACKGROUND_SLICE) {
     const dist = Math.random() * radius;
     const x = center + Math.cos(angle) * dist;
     const y = center + Math.sin(angle) * dist;
-    const brightness = 150 + Math.floor(Math.random() * 80);
-    octx.fillStyle = `rgba(${brightness}, ${brightness + 10}, ${brightness + 10}, 0.9)`;
+    const color = pickPsycheColor();
+    const intensity = 0.6 + Math.random() * 0.5;
+    octx.fillStyle = rgba(color, 0.85, intensity);
     octx.fillRect(x, y, 1, 1);
   }
   return offscreen;
@@ -2514,11 +2544,13 @@ function createNebulaTexture(size, config = NEBULA) {
   const center = size / 2;
   const radius = size * config.RADIUS_SCALE;
   const ringWidth = radius * config.RING_WIDTH;
+  const ringColorA = pickPsycheColor();
+  const ringColorB = pickPsycheColor();
 
   const ringGrad = octx.createRadialGradient(center, center, radius - ringWidth, center, center, radius + ringWidth);
-  ringGrad.addColorStop(0, "rgba(120, 190, 185, 0)");
-  ringGrad.addColorStop(0.5, "rgba(120, 190, 185, 0.18)");
-  ringGrad.addColorStop(1, "rgba(120, 190, 185, 0)");
+  ringGrad.addColorStop(0, rgba(ringColorA, 0));
+  ringGrad.addColorStop(0.5, rgba(ringColorB, 0.26));
+  ringGrad.addColorStop(1, rgba(ringColorA, 0));
   octx.fillStyle = ringGrad;
   octx.beginPath();
   octx.arc(center, center, radius + ringWidth, 0, Math.PI * 2);
@@ -2530,9 +2562,10 @@ function createNebulaTexture(size, config = NEBULA) {
     const x = center + Math.cos(angle) * dist;
     const y = center + Math.sin(angle) * dist;
     const blobRadius = ringWidth * (0.35 + Math.random() * 0.6);
+    const blobColor = pickPsycheColor();
     const blob = octx.createRadialGradient(x, y, 0, x, y, blobRadius);
-    blob.addColorStop(0, "rgba(110, 180, 175, 0.25)");
-    blob.addColorStop(1, "rgba(110, 180, 175, 0)");
+    blob.addColorStop(0, rgba(blobColor, 0.35));
+    blob.addColorStop(1, rgba(blobColor, 0));
     octx.fillStyle = blob;
     octx.beginPath();
     octx.arc(x, y, blobRadius, 0, Math.PI * 2);
@@ -2776,6 +2809,9 @@ function startGame(canvas, ctx, onGameOver) {
   let shakeStrength = 0;
   let thrustParticleCarry = 0;
   let trailSparkCarry = 0;
+  const backgroundEvents = [];
+  let backgroundClock = 0;
+  let nextBackgroundEvent = 0;
   const mouse = {
     x: canvas.width / 2,
     y: canvas.height / 2,
@@ -2908,6 +2944,78 @@ function startGame(canvas, ctx, onGameOver) {
     }
   }
 
+  function scheduleNextBackgroundEvent(now) {
+    nextBackgroundEvent = now + randomRange(BACKGROUND_EVENTS.MIN_INTERVAL, BACKGROUND_EVENTS.MAX_INTERVAL);
+  }
+
+  function spawnBackgroundEvent(now) {
+    if (backgroundEvents.length >= BACKGROUND_EVENTS.MAX_ACTIVE) {
+      scheduleNextBackgroundEvent(now);
+      return;
+    }
+    const typeRoll = Math.random();
+    let type = "quasar";
+    if (typeRoll < 0.22) type = "supernova";
+    else if (typeRoll < 0.45) type = "nebulaBurst";
+    else if (typeRoll < 0.7) type = "meteor";
+    else if (typeRoll < 0.85) type = "warp";
+
+    const margin = BACKGROUND_EVENTS.EDGE_MARGIN;
+    const posX = randomRange(margin, canvas.width - margin);
+    const posY = randomRange(margin, canvas.height - margin);
+    const base = {
+      type,
+      start: now,
+      duration: randomRange(2.5, 8.5),
+      x: posX,
+      y: posY,
+      colors: [pickPsycheColor(), pickPsycheColor(), pickPsycheColor()]
+    };
+
+    if (type === "quasar") {
+      base.duration = randomRange(2.8, 4.6);
+      base.angle = randomRange(0, Math.PI * 2);
+      base.length = randomRange(420, 900);
+      base.width = randomRange(2, 4);
+    } else if (type === "supernova") {
+      base.duration = randomRange(6, 10);
+      base.radius = randomRange(40, 120);
+      base.maxRadius = base.radius + randomRange(180, 320);
+    } else if (type === "nebulaBurst") {
+      base.duration = randomRange(4.5, 8);
+      base.radius = randomRange(120, 260);
+      base.rotation = randomRange(0, Math.PI * 2);
+    } else if (type === "meteor") {
+      base.duration = randomRange(1.6, 2.8);
+      base.angle = randomRange(0, Math.PI * 2);
+      base.length = randomRange(140, 260);
+      base.travel = randomRange(220, 420);
+      base.count = Math.floor(randomRange(2, 5));
+    } else if (type === "warp") {
+      base.duration = randomRange(2.2, 4.4);
+      base.radius = randomRange(60, 140);
+      base.maxRadius = base.radius + randomRange(220, 420);
+    }
+
+    backgroundEvents.push(base);
+    scheduleNextBackgroundEvent(now);
+  }
+
+  function updateBackgroundEvents(dt) {
+    backgroundClock += dt;
+    if (backgroundClock >= nextBackgroundEvent) {
+      spawnBackgroundEvent(backgroundClock);
+    }
+    for (let i = backgroundEvents.length - 1; i >= 0; i--) {
+      const evt = backgroundEvents[i];
+      if (backgroundClock > evt.start + evt.duration) {
+        backgroundEvents.splice(i, 1);
+      }
+    }
+  }
+
+  scheduleNextBackgroundEvent(0);
+
   function spawnThrustParticles(dt) {
     const thrust = ship.thrusting;
     const thrustPower = Math.min(1, Math.abs(thrust));
@@ -3019,6 +3127,7 @@ function startGame(canvas, ctx, onGameOver) {
     updateEnemyPings(dt);
     updateAlerts(dt);
     updateShake(dt);
+    updateBackgroundEvents(dt);
     if (pendingGameOver) {
       gameOverTimer = Math.max(0, gameOverTimer - dt);
       if (gameOverTimer === 0) {
@@ -3035,6 +3144,12 @@ function startGame(canvas, ctx, onGameOver) {
       return;
     }
     let mouseInput = null;
+    let keyboardRotationInput = 0;
+    if (keys["arrowleft"] || keys["a"]) keyboardRotationInput -= 1;
+    if (keys["arrowright"] || keys["d"]) keyboardRotationInput += 1;
+    let keyboardThrustInput = 0;
+    if (keys["arrowup"] || keys["w"]) keyboardThrustInput = 1;
+    if (keys["arrowdown"] || keys["s"]) keyboardThrustInput = -1;
     if (mouseAimEnabled && mouse.hasMoved) {
       const centerX = canvas.width / 2 + camera.shakeX;
       const centerY = canvas.height / 2 + camera.shakeY;
@@ -3043,9 +3158,9 @@ function startGame(canvas, ctx, onGameOver) {
       const dx = worldX - ship.x;
       const dy = worldY - ship.y;
       mouseInput = {
-        aimAngle: Math.atan2(dx, -dy)
+        aimAngle: keyboardRotationInput === 0 ? Math.atan2(dx, -dy) : null
       };
-      if (mouse.rightDown) {
+      if (mouse.rightDown && keyboardThrustInput === 0) {
         mouseInput.thrustInput = 1;
       }
     }
@@ -3319,6 +3434,8 @@ function render() {
     ctx.drawImage(nebulaField, -nebulaField.width / 2, -nebulaField.height / 2);
     ctx.restore();
   }
+
+  drawBackgroundEvents(ctx, backgroundEvents, backgroundClock, canvas.width, canvas.height);
 
   // World (rotated)
   camera.applyTransform(ctx, canvas);
@@ -4092,6 +4209,130 @@ function drawMouseReticle(ctx, mouse, screenW, screenH, active) {
   ctx.arc(0, 0, 4.5, 0, Math.PI * 2);
   ctx.stroke();
   ctx.restore();
+}
+
+function drawBackgroundEvents(ctx, events, clock, screenW, screenH) {
+  if (!events || events.length === 0) {
+    return;
+  }
+
+  const fadeIn = 0.18;
+  const fadeOut = 0.18;
+
+  for (const evt of events) {
+    const elapsed = clock - evt.start;
+    const t = Math.max(0, Math.min(1, elapsed / evt.duration));
+    let alpha = 1;
+    if (t < fadeIn) {
+      alpha = t / fadeIn;
+    } else if (t > 1 - fadeOut) {
+      alpha = (1 - t) / fadeOut;
+    }
+
+    if (alpha <= 0) {
+      continue;
+    }
+
+    if (evt.type === "quasar") {
+      const [colorA, colorB] = evt.colors;
+      ctx.save();
+      ctx.globalAlpha = alpha * 0.6;
+      ctx.translate(evt.x, evt.y);
+      ctx.rotate(evt.angle);
+      const beamGrad = ctx.createLinearGradient(0, 0, evt.length, 0);
+      beamGrad.addColorStop(0, rgba(colorA, 0));
+      beamGrad.addColorStop(0.5, rgba(colorB, 0.85));
+      beamGrad.addColorStop(1, rgba(colorA, 0));
+      ctx.strokeStyle = beamGrad;
+      ctx.lineWidth = evt.width;
+      ctx.beginPath();
+      ctx.moveTo(-evt.length * 0.1, 0);
+      ctx.lineTo(evt.length, 0);
+      ctx.stroke();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.fillStyle = rgba(colorB, 0.55);
+      ctx.beginPath();
+      ctx.arc(0, 0, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    } else if (evt.type === "supernova") {
+      const [colorA, colorB, colorC] = evt.colors;
+      const radius = evt.radius + (evt.maxRadius - evt.radius) * t;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = alpha * 0.6;
+      const grad = ctx.createRadialGradient(evt.x, evt.y, 0, evt.x, evt.y, radius);
+      grad.addColorStop(0, rgba(colorA, 0.85, 1.1));
+      grad.addColorStop(0.45, rgba(colorB, 0.55));
+      grad.addColorStop(1, rgba(colorC, 0));
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(evt.x, evt.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    } else if (evt.type === "nebulaBurst") {
+      const [colorA, colorB] = evt.colors;
+      const radius = evt.radius * (0.8 + t * 0.6);
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = alpha * 0.5;
+      ctx.translate(evt.x, evt.y);
+      ctx.rotate(evt.rotation + t * 0.8);
+      ctx.strokeStyle = rgba(colorA, 0.6);
+      ctx.lineWidth = 8;
+      ctx.beginPath();
+      ctx.arc(0, 0, radius, -Math.PI / 3, Math.PI / 2);
+      ctx.stroke();
+      ctx.strokeStyle = rgba(colorB, 0.45);
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(0, 0, radius * 0.7, Math.PI / 2, Math.PI * 1.1);
+      ctx.stroke();
+      ctx.restore();
+    } else if (evt.type === "meteor") {
+      const [colorA, colorB] = evt.colors;
+      const travel = evt.travel * t;
+      const dirX = Math.cos(evt.angle);
+      const dirY = Math.sin(evt.angle);
+      ctx.save();
+      ctx.globalAlpha = alpha * 0.55;
+      for (let i = 0; i < evt.count; i++) {
+        const offset = (i - (evt.count - 1) / 2) * 18;
+        const sx = evt.x + dirX * travel + -dirY * offset;
+        const sy = evt.y + dirY * travel + dirX * offset;
+        const ex = sx + dirX * evt.length;
+        const ey = sy + dirY * evt.length;
+        const streak = ctx.createLinearGradient(sx, sy, ex, ey);
+        streak.addColorStop(0, rgba(colorA, 0));
+        streak.addColorStop(0.6, rgba(colorB, 0.8));
+        streak.addColorStop(1, rgba(colorA, 0));
+        ctx.strokeStyle = streak;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+      }
+      ctx.restore();
+    } else if (evt.type === "warp") {
+      const [colorA, colorB] = evt.colors;
+      const radius = evt.radius + (evt.maxRadius - evt.radius) * t;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = alpha * 0.4;
+      ctx.strokeStyle = rgba(colorA, 0.7);
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(evt.x, evt.y, radius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = rgba(colorB, 0.4);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(evt.x, evt.y, radius * 0.7, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
 }
 
 function drawScreenEffects(ctx, screenW, screenH) {
