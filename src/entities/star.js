@@ -57,6 +57,20 @@ export class Star {
       ctx.restore();
     }
 
+    const glowAlpha = 0.18 + Math.abs(Math.sin(this.pulsePhase)) * 0.2;
+    const glowRadius = this.radius * 2.2 * this.pulseScale;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = glowAlpha;
+    const glow = ctx.createRadialGradient(this.x, this.y, this.radius * 0.2, this.x, this.y, glowRadius);
+    glow.addColorStop(0, this.bodyColor);
+    glow.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, glowRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
     const sprite = STAR_SPRITES[this.spriteKey];
     if (sprite && sprite.complete && sprite.naturalWidth > 0) {
       const scale = ((this.radius * 2) / sprite.naturalWidth) * this.pulseScale;

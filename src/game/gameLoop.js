@@ -29,10 +29,19 @@ const COMPASS = {
   TICK_DEG: 15
 };
 
+const BEARING = {
+  RADIUS: 36,
+  SCAN_SIZE: 5,
+  FUEL_SIZE: 3,
+  SCAN_PRIMARY_ALPHA: 0.95,
+  SCAN_SECONDARY_ALPHA: 0.55,
+  FUEL_ALPHA: 0.3
+};
+
 const ACTIVE_SECTOR_RANGE = 1;
 
 const START_SAFE_RADIUS = 1600;
-const FUEL_PICKUP_AMOUNT_RATIO = 0.5;
+const FUEL_PICKUP_AMOUNT_RATIO = 1.0;
 const STARTING_LIVES = 3;
 const INVULN_DURATION = 1.25;
 const GAME_OVER_DELAY = 0.7;
@@ -42,12 +51,20 @@ const SCORE_POINTS = {
   ASTEROID: 5,
   ENEMY: 25,
   FUEL: 15,
-  SURVEY: 20
+  SURVEY: 40
 };
 
 const STARFIELD = {
   DENSITY: 0.002,
-  ALPHA: 0.45
+  ALPHA: 0.45,
+  BRIGHTNESS_MIN: 180,
+  BRIGHTNESS_MAX: 255
+};
+const DUSTFIELD = {
+  DENSITY: 0.0012,
+  ALPHA: 0.22,
+  BRIGHTNESS_MIN: 80,
+  BRIGHTNESS_MAX: 160
 };
 const BULLET = {
   SPEED: 900,
@@ -94,6 +111,16 @@ const ALERT = {
   DURATION: 2,
   FADE: 0.25
 };
+const SHAKE = {
+  DURATION: 0.35,
+  HIT: 6,
+  SURVEY: 3
+};
+const TRAIL_COLOR = {
+  SPEED: 520,
+  SLOW: [90, 140, 220],
+  FAST: [200, 240, 255]
+};
 class Particle {
   constructor(x, y, angle, speed, life, color, size) {
     this.x = x;
@@ -112,12 +139,13 @@ class Particle {
     this.life -= dt;
   }
 
-  draw(ctx) {
-    const alpha = this.life / this.maxLife;
+  draw(ctx, scale = 1, alphaScale = 1) {
+    const lifeRatio = this.life / this.maxLife;
+    const alpha = lifeRatio * alphaScale;
     ctx.globalAlpha = alpha;
     ctx.fillStyle = this.color;
     ctx.beginPath();
-    ctx.arc(this.x, this.y, this.size * alpha, 0, Math.PI * 2);
+    ctx.arc(this.x, this.y, this.size * lifeRatio * scale, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
   }
@@ -220,20 +248,24 @@ function getViewRadius(canvas, camera) {
   return (Math.hypot(canvas.width, canvas.height) / 2) / camera.zoom;
 }
 
-function createStarfield(width, height) {
+function createStarfield(width, height, config = STARFIELD) {
   const offscreen = document.createElement("canvas");
   offscreen.width = width;
   offscreen.height = height;
   const octx = offscreen.getContext("2d");
   const imageData = octx.createImageData(width, height);
   const data = imageData.data;
-  const count = Math.floor(width * height * STARFIELD.DENSITY);
+  const density = config?.DENSITY ?? STARFIELD.DENSITY;
+  const minBrightness = config?.BRIGHTNESS_MIN ?? STARFIELD.BRIGHTNESS_MIN;
+  const maxBrightness = config?.BRIGHTNESS_MAX ?? STARFIELD.BRIGHTNESS_MAX;
+  const brightnessSpan = Math.max(0, maxBrightness - minBrightness);
+  const count = Math.floor(width * height * density);
 
   for (let i = 0; i < count; i++) {
     const x = Math.floor(Math.random() * width);
     const y = Math.floor(Math.random() * height);
     const idx = (y * width + x) * 4;
-    const brightness = 180 + Math.floor(Math.random() * 75);
+    const brightness = minBrightness + Math.floor(Math.random() * (brightnessSpan + 1));
     data[idx] = brightness;
     data[idx + 1] = brightness;
     data[idx + 2] = brightness;
@@ -431,9 +463,11 @@ export function startGame(canvas, ctx, onGameOver) {
   let lastTrailY = null;
   let trailFadeTimer = 0;
   let starfield = null;
+  let dustfield = null;
   let starfieldW = 0;
   let starfieldH = 0;
   const STARFIELD_PARALLAX = 0.03;
+  const DUSTFIELD_PARALLAX = 0.015;
   const particles = [];
   const bullets = [];
   const enemyBullets = [];
@@ -466,6 +500,9 @@ export function startGame(canvas, ctx, onGameOver) {
   let enemiesInRange = [];
   const enemyPings = [];
   let alertClock = 0;
+  let shakeTime = 0;
+  let shakeDuration = 0;
+  let shakeStrength = 0;
 
   function respawn() {
     ship.x = startX;
@@ -507,6 +544,31 @@ export function startGame(canvas, ctx, onGameOver) {
     });
   }
 
+  function triggerShake(strength, duration = SHAKE.DURATION) {
+    shakeStrength = Math.max(shakeStrength, strength);
+    shakeTime = Math.max(shakeTime, duration);
+    shakeDuration = Math.max(shakeDuration, duration);
+  }
+
+  function updateShake(dt) {
+    if (shakeTime > 0) {
+      shakeTime = Math.max(0, shakeTime - dt);
+      const fade = shakeDuration > 0 ? shakeTime / shakeDuration : 0;
+      const intensity = shakeStrength * fade;
+      camera.shakeX = (Math.random() * 2 - 1) * intensity;
+      camera.shakeY = (Math.random() * 2 - 1) * intensity;
+      if (shakeTime === 0) {
+        shakeStrength = 0;
+        shakeDuration = 0;
+      }
+    } else {
+      camera.shakeX = 0;
+      camera.shakeY = 0;
+    }
+  }
+
+  queueAlert("Scan the sector, but watch your fuel!", 0, ALERT.DURATION * 1.5);
+
   function updateAlerts(dt) {
     alertClock += dt;
     for (let i = alerts.length - 1; i >= 0; i--) {
@@ -538,6 +600,7 @@ export function startGame(canvas, ctx, onGameOver) {
     updateEnemyBullets(dt);
     updateEnemyPings(dt);
     updateAlerts(dt);
+    updateShake(dt);
     if (pendingGameOver) {
       gameOverTimer = Math.max(0, gameOverTimer - dt);
       if (gameOverTimer === 0) {
@@ -664,6 +727,7 @@ export function startGame(canvas, ctx, onGameOver) {
       const dy = ship.y - star.y;
       const dist = Math.hypot(dx, dy);
       if (dist < star.radius) {
+        triggerShake(SHAKE.HIT);
         spawnExplosion(ship.x, ship.y, "star");
         lives -= 1;
         if (lives <= 0) {
@@ -685,6 +749,7 @@ export function startGame(canvas, ctx, onGameOver) {
           const dy = ship.y - asteroid.y;
           const dist = Math.hypot(dx, dy);
           if (dist < asteroid.radius + SHIP_RADIUS) {
+            triggerShake(SHAKE.HIT);
             lives -= 1;
             if (lives <= 0) {
               spawnExplosion(ship.x, ship.y, "normal");
@@ -731,10 +796,13 @@ export function startGame(canvas, ctx, onGameOver) {
 
     if (!sector.goalDelivered && sector.endZone.containsPoint(ship.x, ship.y, SHIP_RADIUS)) {
       sector.goalDelivered = true;
+      ship.fuel = ship.maxFuel;
       surveyed += 1;
       scoreMultiplier = 1 + surveyed;
       addScore(SCORE_POINTS.SURVEY);
       queueAlert("Sector surveyed.");
+      queueAlert("Fuel tanks refilled!", ALERT.DURATION);
+      triggerShake(SHAKE.SURVEY);
       sounds.play("got_survey");
       console.log("[survey] completed", {
         sector: `${sector.sx},${sector.sy}`,
@@ -742,7 +810,7 @@ export function startGame(canvas, ctx, onGameOver) {
       });
       const spawned = spawnEnemyForSurvey();
       if (spawned > 0) {
-        queueAlert("Enemies have been alerted as to your position.", 2);
+        queueAlert("Enemies have been alerted as to your position.", ALERT.DURATION * 2);
       }
     }
   }
@@ -751,10 +819,19 @@ function render() {
   if (canvas.width !== starfieldW || canvas.height !== starfieldH) {
     starfieldW = canvas.width;
     starfieldH = canvas.height;
-    starfield = createStarfield(starfieldW, starfieldH);
+    starfield = createStarfield(starfieldW, starfieldH, STARFIELD);
+    dustfield = createStarfield(starfieldW, starfieldH, DUSTFIELD);
   }
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (dustfield) {
+    ctx.save();
+    ctx.globalAlpha = DUSTFIELD.ALPHA;
+    const offsetX = -ship.x * DUSTFIELD_PARALLAX;
+    const offsetY = -ship.y * DUSTFIELD_PARALLAX;
+    drawStarfield(ctx, dustfield, offsetX, offsetY, canvas.width, canvas.height);
+    ctx.restore();
+  }
   if (starfield) {
     ctx.save();
     ctx.globalAlpha = STARFIELD.ALPHA;
@@ -766,7 +843,8 @@ function render() {
 
   // World (rotated)
   camera.applyTransform(ctx, canvas);
-  drawTrail(ctx, trail);
+  const shipSpeed = Math.hypot(ship.vx, ship.vy);
+  drawTrail(ctx, trail, shipSpeed);
   drawSectorBounds(ctx, sector);
   const viewRadius = getViewRadius(canvas, camera);
   for (const activeSector of activeSectors) {
@@ -805,7 +883,9 @@ function render() {
 
   if (DEBUG.VECTORS) {
     drawDebugVectors(ctx, ship);
-    }
+  }
+  drawScreenEffects(ctx, canvas.width, canvas.height);
+  drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, canvas.width, canvas.height);
   drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, canvas.width, canvas.height);
   drawFuelGauge(ctx, ship, canvas.width, canvas.height);
   drawStatusHud(ctx, ship, lives, surveyed, timeSpent, canvas.width, canvas.height);
@@ -814,10 +894,19 @@ function render() {
   drawAlerts(ctx, canvas.width, canvas.height);
 }
 
-function drawTrail(ctx, trail) {
+function lerp(start, end, t) {
+  return start + (end - start) * t;
+}
+
+function drawTrail(ctx, trail, speed = 0) {
   if (trail.length < 2) {
     return;
   }
+
+  const speedRatio = Math.min(1, speed / TRAIL_COLOR.SPEED);
+  const trailR = Math.round(lerp(TRAIL_COLOR.SLOW[0], TRAIL_COLOR.FAST[0], speedRatio));
+  const trailG = Math.round(lerp(TRAIL_COLOR.SLOW[1], TRAIL_COLOR.FAST[1], speedRatio));
+  const trailB = Math.round(lerp(TRAIL_COLOR.SLOW[2], TRAIL_COLOR.FAST[2], speedRatio));
 
   ctx.save();
   ctx.lineCap = "round";
@@ -833,7 +922,7 @@ function drawTrail(ctx, trail) {
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
-    ctx.strokeStyle = `rgba(140, 200, 255, ${alpha})`;
+    ctx.strokeStyle = `rgba(${trailR}, ${trailG}, ${trailB}, ${alpha})`;
     ctx.stroke();
   }
   ctx.restore();
@@ -1360,6 +1449,93 @@ function drawCompassHud(ctx, ship, activeSectors, enemies, fuelPickups, screenW,
   }
 }
 
+function drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, screenW, screenH) {
+  if (!activeSectors || activeSectors.length === 0) {
+    return;
+  }
+
+  const scanTargets = [];
+  for (const sector of activeSectors) {
+    if (!sector.goalDelivered && sector.endZone) {
+      const ex = sector.endZone.x + sector.endZone.width / 2;
+      const ey = sector.endZone.y + sector.endZone.height / 2;
+      const dx = ex - ship.x;
+      const dy = ey - ship.y;
+      scanTargets.push({ x: ex, y: ey, dist2: dx * dx + dy * dy });
+    }
+  }
+  scanTargets.sort((a, b) => a.dist2 - b.dist2);
+
+  const hasFuel = fuelPickups && fuelPickups.length > 0;
+  if (scanTargets.length === 0 && !hasFuel) {
+    return;
+  }
+
+  const centerX = screenW / 2;
+  const centerY = screenH / 2;
+  const scanColor = "rgba(120, 255, 140, 1)";
+  const scanGlow = "rgba(120, 255, 140, 0.75)";
+  const fuelColor = "rgba(255, 255, 255, 1)";
+
+  function drawDot(angle, size, alpha, color, glow) {
+    const x = centerX + Math.cos(angle) * BEARING.RADIUS;
+    const y = centerY + Math.sin(angle) * BEARING.RADIUS;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = color;
+    if (glow) {
+      ctx.shadowColor = glow;
+      ctx.shadowBlur = 10;
+    }
+    ctx.beginPath();
+    ctx.arc(x, y, size, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  if (scanTargets.length > 0) {
+    const primary = scanTargets[0];
+    const angle = Math.atan2(primary.y - ship.y, primary.x - ship.x);
+    drawDot(angle, BEARING.SCAN_SIZE, BEARING.SCAN_PRIMARY_ALPHA, scanColor, scanGlow);
+  }
+  if (scanTargets.length > 1) {
+    const secondary = scanTargets[1];
+    const angle = Math.atan2(secondary.y - ship.y, secondary.x - ship.x);
+    drawDot(angle, BEARING.SCAN_SIZE, BEARING.SCAN_SECONDARY_ALPHA, scanColor, scanGlow);
+  }
+
+  if (hasFuel) {
+    for (const fuel of fuelPickups) {
+      const angle = Math.atan2(fuel.y - ship.y, fuel.x - ship.x);
+      drawDot(angle, BEARING.FUEL_SIZE, BEARING.FUEL_ALPHA, fuelColor);
+    }
+  }
+}
+
+function drawScreenEffects(ctx, screenW, screenH) {
+  const centerX = screenW / 2;
+  const centerY = screenH / 2;
+  const maxRadius = Math.max(screenW, screenH) * 0.6;
+  const minRadius = Math.min(screenW, screenH) * 0.25;
+
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  const glow = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, maxRadius);
+  glow.addColorStop(0, "rgba(120, 190, 255, 0.12)");
+  glow.addColorStop(1, "rgba(0, 0, 0, 0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, screenW, screenH);
+  ctx.restore();
+
+  ctx.save();
+  const vignette = ctx.createRadialGradient(centerX, centerY, minRadius, centerX, centerY, maxRadius);
+  vignette.addColorStop(0, "rgba(0, 0, 0, 0)");
+  vignette.addColorStop(1, "rgba(0, 0, 0, 0.45)");
+  ctx.fillStyle = vignette;
+  ctx.fillRect(0, 0, screenW, screenH);
+  ctx.restore();
+}
+
 function drawAlerts(ctx, screenW, screenH) {
   if (alerts.length === 0) {
     return;
@@ -1441,6 +1617,7 @@ function updateEnemyBullets(dt) {
             }
           }
         }
+        triggerShake(SHAKE.HIT);
         lives -= 1;
         if (lives <= 0) {
           spawnExplosion(ship.x, ship.y, "normal");
@@ -1778,6 +1955,9 @@ function drawParticles(ctx) {
   ctx.globalCompositeOperation = "lighter";
   for (const p of particles) {
     p.draw(ctx);
+  }
+  for (const p of particles) {
+    p.draw(ctx, 2.2, 0.35);
   }
   ctx.restore();
 }

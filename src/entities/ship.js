@@ -1,6 +1,6 @@
 const ROT_SPEED = 2.5;     // radians/sec
 const THRUST = 200;
-const MAX_FUEL = 200;
+const MAX_FUEL = 400;
 const THRUST_FUEL_RATE = 18;
 const ROT_FUEL_RATE = THRUST_FUEL_RATE * 0.15;
 import { sounds } from "../game/audio.js";
@@ -138,11 +138,25 @@ export class Ship {
     const flicker = 0.8 + Math.random() * 0.4;
     const flameLen = 8 * flicker;
     const outerLen = flameLen * 1.2;
+    const heatLen = outerLen * 1.6;
 
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
     for (const ox of offsets) {
       ctx.save();
       ctx.translate(ox, baseY);
       ctx.scale(1, direction);
+
+      const heatGradient = ctx.createLinearGradient(0, 0, 0, heatLen);
+      heatGradient.addColorStop(0, "rgba(255, 200, 140, 0.35)");
+      heatGradient.addColorStop(1, "rgba(255, 120, 60, 0)");
+      ctx.fillStyle = heatGradient;
+      ctx.beginPath();
+      ctx.moveTo(-4, 0);
+      ctx.lineTo(4, 0);
+      ctx.lineTo(0, heatLen);
+      ctx.closePath();
+      ctx.fill();
 
       ctx.fillStyle = "rgba(255, 140, 60, 0.85)";
       ctx.beginPath();
@@ -162,6 +176,7 @@ export class Ship {
 
       ctx.restore();
     }
+    ctx.restore();
   }
 
 }

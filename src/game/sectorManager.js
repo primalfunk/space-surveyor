@@ -41,9 +41,7 @@ const STAR_TYPES = {
     minimapColor: "gold",
     spriteKey: "yellow",
     wellMultiplier: 1.3,
-    massMultiplier: 2.5,
-    countMin: 2,
-    countMax: 3
+    massMultiplier: 2.5
   },
   red: {
     id: "red",
@@ -53,9 +51,7 @@ const STAR_TYPES = {
     minimapColor: "#ff6b6b",
     spriteKey: "red",
     wellMultiplier: 1.0,
-    massMultiplier: 1.0,
-    countMin: 3,
-    countMax: 5
+    massMultiplier: 1.0
   },
   blue: {
     id: "blue",
@@ -65,9 +61,7 @@ const STAR_TYPES = {
     minimapColor: "#7ad2ff",
     spriteKey: "blue",
     wellMultiplier: 1.69,
-    massMultiplier: 4.0,
-    countMin: 1,
-    countMax: 1
+    massMultiplier: 4.0
   }
 };
 const GOAL = {
@@ -150,50 +144,71 @@ function getStarPulseConfig(typeId) {
 }
 
 const ZONES = {
-  start: { id: "start", starMultiplier: 0.5, asteroidMultiplier: 0.5 },
-  middle: { id: "middle", starMultiplier: 1.0, asteroidMultiplier: 1.0 },
-  outer: { id: "outer", starMultiplier: 1.3, asteroidMultiplier: 1.3 }
+  start: { id: "start", asteroidMultiplier: 0.5 },
+  middle: { id: "middle", asteroidMultiplier: 1.0 },
+  outer: { id: "outer", asteroidMultiplier: 1.3 }
 };
 
-function getZoneConfig(sx, sy) {
-  if (sx === 0 && sy === 0) {
+function getZoneConfig(ring) {
+  if (ring === 0) {
     return ZONES.start;
   }
-  const ring = Math.max(Math.abs(sx), Math.abs(sy));
   if (ring === 1) {
     return ZONES.middle;
   }
   return ZONES.outer;
 }
 
-function scaleCount(count, multiplier) {
-  if (multiplier >= 1) {
-    return Math.max(0, Math.round(count * multiplier));
+function getStarCountsForRing(ring) {
+  if (ring === 0) {
+    return {
+      red: { min: 1, max: 1 },
+      yellow: { min: 0, max: 0 },
+      blue: { min: 0, max: 0 }
+    };
   }
-  return Math.max(0, Math.floor(count * multiplier));
+  if (ring === 1) {
+    return {
+      red: { min: 1, max: 2 },
+      yellow: { min: 1, max: 2 },
+      blue: { min: 0, max: 0 }
+    };
+  }
+  if (ring === 2) {
+    return {
+      red: { min: 2, max: 3 },
+      yellow: { min: 2, max: 3 },
+      blue: { min: 1, max: 1 }
+    };
+  }
+  return {
+    red: { min: ring, max: ring + 1 },
+    yellow: { min: ring, max: ring + 1 },
+    blue: { min: ring - 2, max: ring - 1 }
+  };
 }
 
-function generateStars(rng, bounds, starMultiplier, safePoint, safeRadius) {
+function generateStars(rng, bounds, ring, safePoint, safeRadius) {
   const stars = [];
-  const counts = [
+  const counts = getStarCountsForRing(ring);
+  const entries = [
     {
       type: "red",
-      count: randomInt(rng, STAR_TYPES.red.countMin, STAR_TYPES.red.countMax)
+      count: randomInt(rng, counts.red.min, counts.red.max)
     },
     {
       type: "yellow",
-      count: randomInt(rng, STAR_TYPES.yellow.countMin, STAR_TYPES.yellow.countMax)
+      count: randomInt(rng, counts.yellow.min, counts.yellow.max)
     },
     {
       type: "blue",
-      count: randomInt(rng, STAR_TYPES.blue.countMin, STAR_TYPES.blue.countMax)
+      count: randomInt(rng, counts.blue.min, counts.blue.max)
     }
   ];
 
-  for (const entry of counts) {
+  for (const entry of entries) {
     const type = getStarTypeConfig(entry.type);
-    const scaledCount = scaleCount(entry.count, starMultiplier);
-    for (let i = 0; i < scaledCount; i++) {
+    for (let i = 0; i < entry.count; i++) {
       const baseMass = randomRange(rng, STAR.MASS_MIN, STAR.MASS_MAX);
       const mass = applyVariance(baseMass * type.massMultiplier, STAR_WELL.VARIANCE);
       const gravityRadius = applyVariance(
@@ -389,15 +404,16 @@ export class SectorManager {
     }
 
     const rng = Math.random;
+    const ring = Math.max(Math.abs(sx), Math.abs(sy));
     const bounds = {
       x: sx * SECTOR_SIZE,
       y: sy * SECTOR_SIZE,
       size: SECTOR_SIZE
     };
-    const zone = getZoneConfig(sx, sy);
-    const useSafePoint = (sx == 0 && sy == 0) ? this.safePoint : null;
-    const safeRadius = (sx == 0 && sy == 0) ? this.safeRadius : 0;
-    const stars = generateStars(rng, bounds, zone.starMultiplier, useSafePoint, safeRadius);
+    const zone = getZoneConfig(ring);
+    const useSafePoint = (ring === 0) ? this.safePoint : null;
+    const safeRadius = (ring === 0) ? this.safeRadius : 0;
+    const stars = generateStars(rng, bounds, ring, useSafePoint, safeRadius);
     const goal = generateGoal(rng, bounds, shipX, shipY, stars);
     const endZone = generateEndZone(rng, bounds, goal.x, goal.y);
     const asteroids = generateAsteroids(
