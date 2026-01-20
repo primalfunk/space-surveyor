@@ -2,7 +2,7 @@ const ROT_SPEED = 2.5;     // radians/sec
 const THRUST = 200;
 const MAX_FUEL = 400;
 const THRUST_FUEL_RATE = 18;
-const ROT_FUEL_RATE = THRUST_FUEL_RATE * 0.15;
+const ROT_FUEL_RATE = 0;
 import { sounds } from "../game/audio.js";
 
 const SHIP_SPRITE = new Image();

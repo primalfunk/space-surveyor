@@ -31,10 +31,15 @@ const COMPASS = {
 
 const BEARING = {
   RADIUS: 36,
-  SCAN_SIZE: 5,
+  CHEVRON_LENGTH: 9,
+  CHEVRON_WIDTH: 5,
+  CHEVRON_GAP: 7,
+  DRIFT_AMPLITUDE: 4,
+  DRIFT_SPEED: 0.0035,
+  PULSE_SPEED: 0.0045,
   FUEL_SIZE: 3,
-  SCAN_PRIMARY_ALPHA: 0.95,
-  SCAN_SECONDARY_ALPHA: 0.55,
+  SCAN_PRIMARY_ALPHA: 0.8,
+  SCAN_SECONDARY_ALPHA: 0.45,
   FUEL_ALPHA: 0.3
 };
 
@@ -1473,8 +1478,8 @@ function drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, screenW, s
 
   const centerX = screenW / 2;
   const centerY = screenH / 2;
-  const scanColor = "rgba(120, 255, 140, 1)";
-  const scanGlow = "rgba(120, 255, 140, 0.75)";
+  const scanColor = "rgba(120, 255, 140, 0.95)";
+  const scanGlow = "rgba(120, 255, 160, 0.7)";
   const fuelColor = "rgba(255, 255, 255, 1)";
 
   function drawDot(angle, size, alpha, color, glow) {
@@ -1493,15 +1498,50 @@ function drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, screenW, s
     ctx.restore();
   }
 
+  function drawChevronPair(angle, alpha, scale = 1, phase = 0) {
+    const time = performance.now();
+    const pulse = 0.85 + 0.15 * Math.sin(time * BEARING.PULSE_SPEED + phase);
+    const drift = Math.sin(time * BEARING.DRIFT_SPEED + phase) * BEARING.DRIFT_AMPLITUDE;
+    const radius = BEARING.RADIUS + drift;
+    const x = centerX + Math.cos(angle) * radius;
+    const y = centerY + Math.sin(angle) * radius;
+    const len = BEARING.CHEVRON_LENGTH * scale;
+    const width = BEARING.CHEVRON_WIDTH * scale;
+    const gap = BEARING.CHEVRON_GAP * scale;
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.globalAlpha = alpha * pulse;
+    ctx.strokeStyle = scanColor;
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.shadowColor = scanGlow;
+    ctx.shadowBlur = 8;
+
+    const drawChevron = (offset) => {
+      ctx.beginPath();
+      ctx.moveTo(-len + offset, -width);
+      ctx.lineTo(offset, 0);
+      ctx.lineTo(-len + offset, width);
+      ctx.stroke();
+    };
+
+    drawChevron(0);
+    drawChevron(-gap);
+    ctx.restore();
+  }
+
   if (scanTargets.length > 0) {
     const primary = scanTargets[0];
     const angle = Math.atan2(primary.y - ship.y, primary.x - ship.x);
-    drawDot(angle, BEARING.SCAN_SIZE, BEARING.SCAN_PRIMARY_ALPHA, scanColor, scanGlow);
+    drawChevronPair(angle, BEARING.SCAN_PRIMARY_ALPHA, 1, 0);
   }
   if (scanTargets.length > 1) {
     const secondary = scanTargets[1];
     const angle = Math.atan2(secondary.y - ship.y, secondary.x - ship.x);
-    drawDot(angle, BEARING.SCAN_SIZE, BEARING.SCAN_SECONDARY_ALPHA, scanColor, scanGlow);
+    drawChevronPair(angle, BEARING.SCAN_SECONDARY_ALPHA, 0.85, Math.PI / 2);
   }
 
   if (hasFuel) {
