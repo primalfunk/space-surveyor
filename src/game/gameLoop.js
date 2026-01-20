@@ -842,11 +842,11 @@ export function startGame(canvas, ctx, onGameOver) {
   }
 
   function buildBackgroundEvent(type, now, posX, posY, scale = 1) {
-    const worldX = ship.x + (posX - canvas.width / 2) / camera.zoom;
-    const worldY = ship.y + (posY - canvas.height / 2) / camera.zoom;
     const driftAngle = randomRange(0, Math.PI * 2);
     const driftSpeed = randomRange(4, 16) * scale;
-    const parallax = randomRange(0.008, 0.016);
+    const parallax = randomRange(0.04, 0.1);
+    const worldX = ship.x + (posX - canvas.width / 2) / (camera.zoom * parallax);
+    const worldY = ship.y + (posY - canvas.height / 2) / (camera.zoom * parallax);
     const base = {
       type,
       start: now,

@@ -2178,6 +2178,12 @@ const BEARING = {
   SCAN_SECONDARY_ALPHA: 0.45,
   FUEL_ALPHA: 0.3
 };
+const SCAN_PULSE = {
+  PERIOD: 2400,
+  RADIUS_MIN: 16,
+  RADIUS_MAX: 160,
+  LINE_WIDTH: 2
+};
 
 const ACTIVE_SECTOR_RANGE = 1;
 
@@ -2292,7 +2298,11 @@ const BACKGROUND_EVENTS = {
   MIN_INTERVAL: 3.5,
   MAX_INTERVAL: 7.5,
   MAX_ACTIVE: 5,
-  EDGE_MARGIN: 80
+  EDGE_MARGIN: 80,
+  CLUSTER_CHANCE: 0.35,
+  CLUSTER_MIN: 2,
+  CLUSTER_MAX: 3,
+  CLUSTER_OFFSET: 140
 };
 const PSYCHE_PALETTE = [
   [255, 80, 220],
@@ -2323,10 +2333,7 @@ const THRUST_PARTICLES = {
 };
 const TRAIL_DISPERSE = {
   BASE_WIDTH: 3,
-  SPREAD: 10,
-  GLOW_WIDTH: 8,
-  BLUR_BASE: 6,
-  BLUR_SPREAD: 12
+  SPREAD: 10
 };
 const TRAIL_SPARKS = {
   RATE: 18,
@@ -2810,6 +2817,7 @@ function startGame(canvas, ctx, onGameOver) {
   let thrustParticleCarry = 0;
   let trailSparkCarry = 0;
   const backgroundEvents = [];
+  const backgroundRecent = [];
   let backgroundClock = 0;
   let nextBackgroundEvent = 0;
   const mouse = {
@@ -2948,56 +2956,97 @@ function startGame(canvas, ctx, onGameOver) {
     nextBackgroundEvent = now + randomRange(BACKGROUND_EVENTS.MIN_INTERVAL, BACKGROUND_EVENTS.MAX_INTERVAL);
   }
 
+  function rollBackgroundType() {
+    const typeRoll = Math.random();
+    if (typeRoll < 0.22) return "supernova";
+    if (typeRoll < 0.45) return "nebulaBurst";
+    if (typeRoll < 0.7) return "meteor";
+    if (typeRoll < 0.85) return "warp";
+    return "quasar";
+  }
+
+  function pickBackgroundType() {
+    let type = rollBackgroundType();
+    for (let i = 0; i < 4 && backgroundRecent.includes(type); i++) {
+      type = rollBackgroundType();
+    }
+    backgroundRecent.push(type);
+    if (backgroundRecent.length > 3) {
+      backgroundRecent.shift();
+    }
+    return type;
+  }
+
+  function buildBackgroundEvent(type, now, posX, posY, scale = 1) {
+    const driftAngle = randomRange(0, Math.PI * 2);
+    const driftSpeed = randomRange(4, 16) * scale;
+    const parallax = randomRange(0.04, 0.1);
+    const worldX = ship.x + (posX - canvas.width / 2) / (camera.zoom * parallax);
+    const worldY = ship.y + (posY - canvas.height / 2) / (camera.zoom * parallax);
+    const base = {
+      type,
+      start: now,
+      duration: randomRange(2.5, 8.5) * scale,
+      worldX,
+      worldY,
+      driftX: Math.cos(driftAngle) * driftSpeed,
+      driftY: Math.sin(driftAngle) * driftSpeed,
+      parallax,
+      colors: [pickPsycheColor(), pickPsycheColor(), pickPsycheColor()]
+    };
+
+    if (type === "quasar") {
+      base.duration = randomRange(2.8, 4.6) * scale;
+      base.angle = randomRange(0, Math.PI * 2);
+      base.length = randomRange(420, 900) * scale;
+      base.width = randomRange(2, 4) * scale;
+    } else if (type === "supernova") {
+      base.duration = randomRange(6, 10) * scale;
+      base.radius = randomRange(40, 120) * scale;
+      base.maxRadius = base.radius + randomRange(180, 320) * scale;
+    } else if (type === "nebulaBurst") {
+      base.duration = randomRange(4.5, 8) * scale;
+      base.radius = randomRange(120, 260) * scale;
+      base.rotation = randomRange(0, Math.PI * 2);
+    } else if (type === "meteor") {
+      base.duration = randomRange(1.6, 2.8) * scale;
+      base.angle = randomRange(0, Math.PI * 2);
+      base.length = randomRange(140, 260) * scale;
+      base.travel = randomRange(220, 420) * scale;
+      base.count = Math.max(1, Math.floor(randomRange(2, 5) * scale));
+    } else if (type === "warp") {
+      base.duration = randomRange(2.2, 4.4) * scale;
+      base.radius = randomRange(60, 140) * scale;
+      base.maxRadius = base.radius + randomRange(220, 420) * scale;
+    }
+
+    return base;
+  }
+
   function spawnBackgroundEvent(now) {
     if (backgroundEvents.length >= BACKGROUND_EVENTS.MAX_ACTIVE) {
       scheduleNextBackgroundEvent(now);
       return;
     }
-    const typeRoll = Math.random();
-    let type = "quasar";
-    if (typeRoll < 0.22) type = "supernova";
-    else if (typeRoll < 0.45) type = "nebulaBurst";
-    else if (typeRoll < 0.7) type = "meteor";
-    else if (typeRoll < 0.85) type = "warp";
-
+    const type = pickBackgroundType();
     const margin = BACKGROUND_EVENTS.EDGE_MARGIN;
     const posX = randomRange(margin, canvas.width - margin);
     const posY = randomRange(margin, canvas.height - margin);
-    const base = {
-      type,
-      start: now,
-      duration: randomRange(2.5, 8.5),
-      x: posX,
-      y: posY,
-      colors: [pickPsycheColor(), pickPsycheColor(), pickPsycheColor()]
-    };
-
-    if (type === "quasar") {
-      base.duration = randomRange(2.8, 4.6);
-      base.angle = randomRange(0, Math.PI * 2);
-      base.length = randomRange(420, 900);
-      base.width = randomRange(2, 4);
-    } else if (type === "supernova") {
-      base.duration = randomRange(6, 10);
-      base.radius = randomRange(40, 120);
-      base.maxRadius = base.radius + randomRange(180, 320);
-    } else if (type === "nebulaBurst") {
-      base.duration = randomRange(4.5, 8);
-      base.radius = randomRange(120, 260);
-      base.rotation = randomRange(0, Math.PI * 2);
-    } else if (type === "meteor") {
-      base.duration = randomRange(1.6, 2.8);
-      base.angle = randomRange(0, Math.PI * 2);
-      base.length = randomRange(140, 260);
-      base.travel = randomRange(220, 420);
-      base.count = Math.floor(randomRange(2, 5));
-    } else if (type === "warp") {
-      base.duration = randomRange(2.2, 4.4);
-      base.radius = randomRange(60, 140);
-      base.maxRadius = base.radius + randomRange(220, 420);
+    backgroundEvents.push(buildBackgroundEvent(type, now, posX, posY, 1));
+    if (Math.random() < BACKGROUND_EVENTS.CLUSTER_CHANCE) {
+      const count = Math.floor(randomRange(BACKGROUND_EVENTS.CLUSTER_MIN, BACKGROUND_EVENTS.CLUSTER_MAX + 1));
+      for (let i = 0; i < count; i++) {
+        if (backgroundEvents.length >= BACKGROUND_EVENTS.MAX_ACTIVE) {
+          break;
+        }
+        const offsetAngle = randomRange(0, Math.PI * 2);
+        const offsetDist = randomRange(40, BACKGROUND_EVENTS.CLUSTER_OFFSET);
+        const clusterX = posX + Math.cos(offsetAngle) * offsetDist;
+        const clusterY = posY + Math.sin(offsetAngle) * offsetDist;
+        const clusterScale = randomRange(0.55, 0.85);
+        backgroundEvents.push(buildBackgroundEvent(type, now, clusterX, clusterY, clusterScale));
+      }
     }
-
-    backgroundEvents.push(base);
     scheduleNextBackgroundEvent(now);
   }
 
@@ -3435,13 +3484,14 @@ function render() {
     ctx.restore();
   }
 
-  drawBackgroundEvents(ctx, backgroundEvents, backgroundClock, canvas.width, canvas.height);
+  drawBackgroundEvents(ctx, backgroundEvents, backgroundClock, ship, canvas.width, canvas.height);
 
   // World (rotated)
   camera.applyTransform(ctx, canvas);
   const shipSpeed = Math.hypot(ship.vx, ship.vy);
   drawTrail(ctx, trail, shipSpeed);
   drawSectorBounds(ctx, sector);
+  drawScanPulse(ctx, ship, activeSectors, time, getViewRadius(canvas, camera));
   const viewRadius = getViewRadius(canvas, camera);
   for (const activeSector of activeSectors) {
     if (activeSector.goalDelivered) {
@@ -3534,23 +3584,18 @@ function drawTrail(ctx, trail, speed = 0) {
   ctx.restore();
 
   ctx.save();
-  ctx.globalCompositeOperation = "lighter";
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  ctx.lineWidth = TRAIL_DISPERSE.GLOW_WIDTH;
   for (let i = 1; i < trail.length; i++) {
     const a = trail[i - 1];
     const b = trail[i];
     const t = i / (trail.length - 1);
     const alpha = (0.08 + 0.35 * t) * (0.5 + speedRatio * 0.6);
     const width = TRAIL_DISPERSE.BASE_WIDTH + t * TRAIL_DISPERSE.SPREAD;
-    const blur = TRAIL_DISPERSE.BLUR_BASE + t * TRAIL_DISPERSE.BLUR_SPREAD;
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
     ctx.lineWidth = width;
-    ctx.shadowColor = `rgba(${trailR}, ${trailG}, ${trailB}, ${alpha})`;
-    ctx.shadowBlur = blur;
     ctx.strokeStyle = `rgba(${trailR}, ${trailG}, ${trailB}, ${alpha})`;
     ctx.stroke();
   }
@@ -4083,6 +4128,52 @@ function drawCompassHud(ctx, ship, activeSectors, enemies, fuelPickups, screenW,
   }
 }
 
+function getNearestScanTarget(ship, activeSectors) {
+  let nearest = null;
+  for (const sector of activeSectors) {
+    if (sector.goalDelivered || !sector.endZone) {
+      continue;
+    }
+    const ex = sector.endZone.x + sector.endZone.width / 2;
+    const ey = sector.endZone.y + sector.endZone.height / 2;
+    const dx = ex - ship.x;
+    const dy = ey - ship.y;
+    const dist2 = dx * dx + dy * dy;
+    if (!nearest || dist2 < nearest.dist2) {
+      nearest = { x: ex, y: ey, dist2 };
+    }
+  }
+  return nearest;
+}
+
+function drawScanPulse(ctx, ship, activeSectors, timeMs, viewRadius) {
+  if (!activeSectors || activeSectors.length === 0) {
+    return;
+  }
+  const target = getNearestScanTarget(ship, activeSectors);
+  if (!target) {
+    return;
+  }
+  const dist = Math.hypot(target.x - ship.x, target.y - ship.y);
+  if (dist > viewRadius + SCAN_PULSE.RADIUS_MAX) {
+    return;
+  }
+
+  const t = (timeMs % SCAN_PULSE.PERIOD) / SCAN_PULSE.PERIOD;
+  const radius = SCAN_PULSE.RADIUS_MIN
+    + (SCAN_PULSE.RADIUS_MAX - SCAN_PULSE.RADIUS_MIN) * t;
+  const alpha = 0.5 * (1 - t);
+
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.strokeStyle = `rgba(120, 200, 190, ${alpha})`;
+  ctx.lineWidth = SCAN_PULSE.LINE_WIDTH;
+  ctx.beginPath();
+  ctx.arc(target.x, target.y, radius, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, screenW, screenH) {
   if (!activeSectors || activeSectors.length === 0) {
     return;
@@ -4211,7 +4302,7 @@ function drawMouseReticle(ctx, mouse, screenW, screenH, active) {
   ctx.restore();
 }
 
-function drawBackgroundEvents(ctx, events, clock, screenW, screenH) {
+function drawBackgroundEvents(ctx, events, clock, ship, screenW, screenH) {
   if (!events || events.length === 0) {
     return;
   }
@@ -4233,16 +4324,26 @@ function drawBackgroundEvents(ctx, events, clock, screenW, screenH) {
       continue;
     }
 
+    const driftX = evt.driftX * elapsed;
+    const driftY = evt.driftY * elapsed;
+    const screenX = screenW / 2 + (evt.worldX - ship.x) * evt.parallax + driftX;
+    const screenY = screenH / 2 + (evt.worldY - ship.y) * evt.parallax + driftY;
+    const wobble = Math.sin((clock + evt.worldX) * 0.25) * 0.15;
+    const hueShift = 0.85 + 0.3 * Math.sin((clock + evt.worldY) * 0.2);
+    const swapPalette = t > 0.5;
+    const [colorA, colorB, colorC] = swapPalette
+      ? [evt.colors[1], evt.colors[2], evt.colors[0]]
+      : evt.colors;
+
     if (evt.type === "quasar") {
-      const [colorA, colorB] = evt.colors;
       ctx.save();
       ctx.globalAlpha = alpha * 0.6;
-      ctx.translate(evt.x, evt.y);
-      ctx.rotate(evt.angle);
+      ctx.translate(screenX, screenY);
+      ctx.rotate(evt.angle + wobble);
       const beamGrad = ctx.createLinearGradient(0, 0, evt.length, 0);
-      beamGrad.addColorStop(0, rgba(colorA, 0));
-      beamGrad.addColorStop(0.5, rgba(colorB, 0.85));
-      beamGrad.addColorStop(1, rgba(colorA, 0));
+      beamGrad.addColorStop(0, rgba(colorA, 0, hueShift));
+      beamGrad.addColorStop(0.5, rgba(colorB, 0.85, hueShift));
+      beamGrad.addColorStop(1, rgba(colorA, 0, hueShift));
       ctx.strokeStyle = beamGrad;
       ctx.lineWidth = evt.width;
       ctx.beginPath();
@@ -4250,47 +4351,44 @@ function drawBackgroundEvents(ctx, events, clock, screenW, screenH) {
       ctx.lineTo(evt.length, 0);
       ctx.stroke();
       ctx.globalCompositeOperation = "lighter";
-      ctx.fillStyle = rgba(colorB, 0.55);
+      ctx.fillStyle = rgba(colorB, 0.55, hueShift);
       ctx.beginPath();
       ctx.arc(0, 0, 10, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     } else if (evt.type === "supernova") {
-      const [colorA, colorB, colorC] = evt.colors;
       const radius = evt.radius + (evt.maxRadius - evt.radius) * t;
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
       ctx.globalAlpha = alpha * 0.6;
-      const grad = ctx.createRadialGradient(evt.x, evt.y, 0, evt.x, evt.y, radius);
-      grad.addColorStop(0, rgba(colorA, 0.85, 1.1));
-      grad.addColorStop(0.45, rgba(colorB, 0.55));
-      grad.addColorStop(1, rgba(colorC, 0));
+      const grad = ctx.createRadialGradient(screenX, screenY, 0, screenX, screenY, radius);
+      grad.addColorStop(0, rgba(colorA, 0.85, 1.1 * hueShift));
+      grad.addColorStop(0.45, rgba(colorB, 0.55, hueShift));
+      grad.addColorStop(1, rgba(colorC, 0, hueShift));
       ctx.fillStyle = grad;
       ctx.beginPath();
-      ctx.arc(evt.x, evt.y, radius, 0, Math.PI * 2);
+      ctx.arc(screenX, screenY, radius, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     } else if (evt.type === "nebulaBurst") {
-      const [colorA, colorB] = evt.colors;
       const radius = evt.radius * (0.8 + t * 0.6);
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
       ctx.globalAlpha = alpha * 0.5;
-      ctx.translate(evt.x, evt.y);
-      ctx.rotate(evt.rotation + t * 0.8);
-      ctx.strokeStyle = rgba(colorA, 0.6);
+      ctx.translate(screenX, screenY);
+      ctx.rotate(evt.rotation + t * 0.8 + wobble);
+      ctx.strokeStyle = rgba(colorA, 0.6, hueShift);
       ctx.lineWidth = 8;
       ctx.beginPath();
       ctx.arc(0, 0, radius, -Math.PI / 3, Math.PI / 2);
       ctx.stroke();
-      ctx.strokeStyle = rgba(colorB, 0.45);
+      ctx.strokeStyle = rgba(colorB, 0.45, hueShift);
       ctx.lineWidth = 4;
       ctx.beginPath();
       ctx.arc(0, 0, radius * 0.7, Math.PI / 2, Math.PI * 1.1);
       ctx.stroke();
       ctx.restore();
     } else if (evt.type === "meteor") {
-      const [colorA, colorB] = evt.colors;
       const travel = evt.travel * t;
       const dirX = Math.cos(evt.angle);
       const dirY = Math.sin(evt.angle);
@@ -4298,14 +4396,14 @@ function drawBackgroundEvents(ctx, events, clock, screenW, screenH) {
       ctx.globalAlpha = alpha * 0.55;
       for (let i = 0; i < evt.count; i++) {
         const offset = (i - (evt.count - 1) / 2) * 18;
-        const sx = evt.x + dirX * travel + -dirY * offset;
-        const sy = evt.y + dirY * travel + dirX * offset;
+        const sx = screenX + dirX * travel + -dirY * offset;
+        const sy = screenY + dirY * travel + dirX * offset;
         const ex = sx + dirX * evt.length;
         const ey = sy + dirY * evt.length;
         const streak = ctx.createLinearGradient(sx, sy, ex, ey);
-        streak.addColorStop(0, rgba(colorA, 0));
-        streak.addColorStop(0.6, rgba(colorB, 0.8));
-        streak.addColorStop(1, rgba(colorA, 0));
+        streak.addColorStop(0, rgba(colorA, 0, hueShift));
+        streak.addColorStop(0.6, rgba(colorB, 0.8, hueShift));
+        streak.addColorStop(1, rgba(colorA, 0, hueShift));
         ctx.strokeStyle = streak;
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -4315,20 +4413,19 @@ function drawBackgroundEvents(ctx, events, clock, screenW, screenH) {
       }
       ctx.restore();
     } else if (evt.type === "warp") {
-      const [colorA, colorB] = evt.colors;
       const radius = evt.radius + (evt.maxRadius - evt.radius) * t;
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
       ctx.globalAlpha = alpha * 0.4;
-      ctx.strokeStyle = rgba(colorA, 0.7);
+      ctx.strokeStyle = rgba(colorA, 0.7, hueShift);
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.arc(evt.x, evt.y, radius, 0, Math.PI * 2);
+      ctx.arc(screenX, screenY, radius, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.strokeStyle = rgba(colorB, 0.4);
+      ctx.strokeStyle = rgba(colorB, 0.4, hueShift);
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.arc(evt.x, evt.y, radius * 0.7, 0, Math.PI * 2);
+      ctx.arc(screenX, screenY, radius * 0.7, 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
     }
