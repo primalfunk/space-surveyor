@@ -51,6 +51,7 @@ export function showStartScreen(root, onStart) {
   controlsList.className = "start-controls-list";
   const controlEntries = [
     { keys: "WASD / ARROWS", desc: "Steer and thrust" },
+    { keys: "TOUCH", desc: "Left stick to steer/thrust, right button to fire" },
     { keys: "M", desc: "Toggle mouse aim" },
     { keys: "MOUSE", desc: "Aim / LMB fire / RMB thrust" },
     { keys: "Z / X", desc: "Zoom Camera out / in" },

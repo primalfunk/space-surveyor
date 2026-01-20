@@ -195,6 +195,14 @@ const THRUST_PARTICLES = {
   SPREAD: 0.45,
   OFFSET: 12
 };
+const TOUCH = {
+  DEADZONE: 12,
+  MAX_RADIUS_MIN: 60,
+  MAX_RADIUS_MAX: 110,
+  MOVE_ZONE: 0.5,
+  HINT_ALPHA: 0.22,
+  ACTIVE_ALPHA: 0.45
+};
 const TRAIL_DISPERSE = {
   BASE_WIDTH: 3,
   SPREAD: 10
@@ -344,6 +352,11 @@ function getViewRadius(canvas, camera) {
 
 function randomRange(min, max) {
   return min + Math.random() * (max - min);
+}
+
+function getHudScale(screenW, screenH) {
+  const base = Math.min(screenW, screenH);
+  return Math.min(1, Math.max(0.75, base / 900));
 }
 
 function pickPsycheColor() {
@@ -691,6 +704,15 @@ export function startGame(canvas, ctx, onGameOver) {
     rightDown: false,
     hasMoved: false
   };
+  const touch = {
+    moveId: null,
+    fireId: null,
+    moveStartX: 0,
+    moveStartY: 0,
+    moveX: 0,
+    moveY: 0,
+    isActive: false
+  };
   const mouseAimStorageKey = "spaceSurveyor_mouseAim";
   let mouseAimEnabled = true;
 
@@ -729,6 +751,55 @@ export function startGame(canvas, ctx, onGameOver) {
   const onContextMenu = (event) => {
     event.preventDefault();
   };
+  const getTouchPosition = (touchEvent) => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = rect.width > 0 ? canvas.width / rect.width : 1;
+    const scaleY = rect.height > 0 ? canvas.height / rect.height : 1;
+    return {
+      x: (touchEvent.clientX - rect.left) * scaleX,
+      y: (touchEvent.clientY - rect.top) * scaleY
+    };
+  };
+  const onTouchStart = (event) => {
+    event.preventDefault();
+    for (const t of event.changedTouches) {
+      const pos = getTouchPosition(t);
+      if (pos.x <= canvas.width * TOUCH.MOVE_ZONE && touch.moveId === null) {
+        touch.moveId = t.identifier;
+        touch.moveStartX = pos.x;
+        touch.moveStartY = pos.y;
+        touch.moveX = pos.x;
+        touch.moveY = pos.y;
+        touch.isActive = true;
+      } else if (touch.fireId === null) {
+        touch.fireId = t.identifier;
+        touch.isActive = true;
+      }
+    }
+  };
+  const onTouchMove = (event) => {
+    event.preventDefault();
+    for (const t of event.changedTouches) {
+      if (t.identifier === touch.moveId) {
+        const pos = getTouchPosition(t);
+        touch.moveX = pos.x;
+        touch.moveY = pos.y;
+      }
+    }
+  };
+  const onTouchEnd = (event) => {
+    event.preventDefault();
+    for (const t of event.changedTouches) {
+      if (t.identifier === touch.moveId) {
+        touch.moveId = null;
+      } else if (t.identifier === touch.fireId) {
+        touch.fireId = null;
+      }
+    }
+    if (touch.moveId === null && touch.fireId === null) {
+      touch.isActive = false;
+    }
+  };
   const onToggleMouseAim = (event) => {
     if (event.key.toLowerCase() !== "m") {
       return;
@@ -742,6 +813,10 @@ export function startGame(canvas, ctx, onGameOver) {
   window.addEventListener("mousemove", onMouseMove);
   window.addEventListener("mousedown", onMouseDown);
   window.addEventListener("mouseup", onMouseUp);
+  canvas.addEventListener("touchstart", onTouchStart, { passive: false });
+  canvas.addEventListener("touchmove", onTouchMove, { passive: false });
+  canvas.addEventListener("touchend", onTouchEnd, { passive: false });
+  canvas.addEventListener("touchcancel", onTouchEnd, { passive: false });
   window.addEventListener("keydown", onToggleMouseAim);
   canvas.addEventListener("contextmenu", onContextMenu);
 
@@ -749,6 +824,10 @@ export function startGame(canvas, ctx, onGameOver) {
     window.removeEventListener("mousemove", onMouseMove);
     window.removeEventListener("mousedown", onMouseDown);
     window.removeEventListener("mouseup", onMouseUp);
+    canvas.removeEventListener("touchstart", onTouchStart);
+    canvas.removeEventListener("touchmove", onTouchMove);
+    canvas.removeEventListener("touchend", onTouchEnd);
+    canvas.removeEventListener("touchcancel", onTouchEnd);
     window.removeEventListener("keydown", onToggleMouseAim);
     canvas.removeEventListener("contextmenu", onContextMenu);
   }
@@ -1056,7 +1135,7 @@ export function startGame(canvas, ctx, onGameOver) {
       }
       return;
     }
-    let mouseInput = null;
+    let externalInput = null;
     let keyboardRotationInput = 0;
     if (keys["arrowleft"] || keys["a"]) keyboardRotationInput -= 1;
     if (keys["arrowright"] || keys["d"]) keyboardRotationInput += 1;
@@ -1070,14 +1149,33 @@ export function startGame(canvas, ctx, onGameOver) {
       const worldY = (mouse.y - centerY) / camera.zoom + ship.y;
       const dx = worldX - ship.x;
       const dy = worldY - ship.y;
-      mouseInput = {
-        aimAngle: keyboardRotationInput === 0 ? Math.atan2(dx, -dy) : null
-      };
+      if (keyboardRotationInput === 0) {
+        externalInput = externalInput || {};
+        externalInput.aimAngle = Math.atan2(dx, -dy);
+      }
       if (mouse.rightDown && keyboardThrustInput === 0) {
-        mouseInput.thrustInput = 1;
+        externalInput = externalInput || {};
+        externalInput.thrustInput = 1;
       }
     }
-    ship.update(dt, mouseInput);
+    if (touch.moveId !== null) {
+      const dx = touch.moveX - touch.moveStartX;
+      const dy = touch.moveY - touch.moveStartY;
+      const dist = Math.hypot(dx, dy);
+      const maxRadius = Math.min(
+        TOUCH.MAX_RADIUS_MAX,
+        Math.max(TOUCH.MAX_RADIUS_MIN, Math.min(canvas.width, canvas.height) * 0.16)
+      );
+      if (dist > TOUCH.DEADZONE && keyboardRotationInput === 0) {
+        externalInput = externalInput || {};
+        externalInput.aimAngle = Math.atan2(dx, -dy);
+      }
+      if (dist > TOUCH.DEADZONE && keyboardThrustInput === 0) {
+        externalInput = externalInput || {};
+        externalInput.thrustInput = Math.min(1, dist / maxRadius);
+      }
+    }
+    ship.update(dt, externalInput);
     spawnThrustParticles(dt);
     timeSpent += dt;
     if (invulnTimer > 0) {
@@ -1250,7 +1348,7 @@ export function startGame(canvas, ctx, onGameOver) {
       return;
     }
 
-    const wantsFire = keys[" "] || (mouseAimEnabled && mouse.leftDown);
+    const wantsFire = keys[" "] || (mouseAimEnabled && mouse.leftDown) || touch.fireId !== null;
     if (shipVisible && wantsFire && fireCooldown === 0 && fireLockout === 0) {
       spawnBullet();
       sounds.play("laser");
@@ -1395,23 +1493,33 @@ function render() {
     drawDebugVectors(ctx, ship);
   }
   drawScreenEffects(ctx, canvas.width, canvas.height);
-  drawMouseReticle(ctx, mouse, canvas.width, canvas.height, mouseAimEnabled);
-  drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, canvas.width, canvas.height);
-  drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, canvas.width, canvas.height);
-  drawFuelGauge(ctx, ship, canvas.width, canvas.height);
+  const hudScale = getHudScale(canvas.width, canvas.height);
+  ctx.save();
+  ctx.scale(hudScale, hudScale);
+  const hudW = canvas.width / hudScale;
+  const hudH = canvas.height / hudScale;
+  const controlLabel = touch.isActive
+    ? "CTRL: TOUCH + KEYS"
+    : (mouseAimEnabled ? "CTRL: MOUSE + KEYS" : "CTRL: KEYS");
+  drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, hudW, hudH);
+  drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, hudW, hudH);
+  drawFuelGauge(ctx, ship, hudW, hudH);
   drawStatusHud(
     ctx,
     ship,
     lives,
     surveyed,
     timeSpent,
-    canvas.width,
-    canvas.height,
-    mouseAimEnabled ? "CTRL: MOUSE + KEYS" : "CTRL: KEYS"
+    hudW,
+    hudH,
+    controlLabel
   );
-  drawScoreHud(ctx, score, scoreMultiplier, scorePulse, canvas.width, canvas.height);
-  drawCompassHud(ctx, ship, activeSectors, enemies, fuelPickups, canvas.width, canvas.height);
-  drawAlerts(ctx, canvas.width, canvas.height);
+  drawScoreHud(ctx, score, scoreMultiplier, scorePulse, hudW, hudH);
+  drawCompassHud(ctx, ship, activeSectors, enemies, fuelPickups, hudW, hudH);
+  drawAlerts(ctx, hudW, hudH);
+  ctx.restore();
+  drawMouseReticle(ctx, mouse, canvas.width, canvas.height, mouseAimEnabled);
+  drawTouchControls(ctx, touch, canvas.width, canvas.height);
 }
 
 function lerp(start, end, t) {
@@ -2162,6 +2270,45 @@ function drawMouseReticle(ctx, mouse, screenW, screenH, active) {
   ctx.stroke();
   ctx.beginPath();
   ctx.arc(0, 0, 4.5, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawTouchControls(ctx, touch, screenW, screenH) {
+  const showHints = touch?.isActive || screenW < 900 || screenH < 700;
+  if (!showHints) {
+    return;
+  }
+
+  const baseRadius = Math.min(70, Math.max(48, Math.min(screenW, screenH) * 0.12));
+  const baseX = touch.moveId !== null ? touch.moveStartX : screenW * 0.18;
+  const baseY = touch.moveId !== null ? touch.moveStartY : screenH * 0.78;
+  const knobX = touch.moveId !== null ? touch.moveX : baseX;
+  const knobY = touch.moveId !== null ? touch.moveY : baseY;
+
+  ctx.save();
+  ctx.globalAlpha = touch.moveId !== null ? TOUCH.ACTIVE_ALPHA : TOUCH.HINT_ALPHA;
+  ctx.strokeStyle = HUD_COLORS.ACCENT_SOFT;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(baseX, baseY, baseRadius, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = HUD_COLORS.ACCENT;
+  ctx.globalAlpha = touch.moveId !== null ? 0.5 : 0.25;
+  ctx.beginPath();
+  ctx.arc(knobX, knobY, baseRadius * 0.35, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  const fireRadius = Math.min(48, Math.max(30, Math.min(screenW, screenH) * 0.08));
+  const fireX = screenW * 0.82;
+  const fireY = screenH * 0.78;
+  ctx.save();
+  ctx.globalAlpha = touch.fireId !== null ? TOUCH.ACTIVE_ALPHA : TOUCH.HINT_ALPHA;
+  ctx.strokeStyle = HUD_COLORS.WARNING;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(fireX, fireY, fireRadius, 0, Math.PI * 2);
   ctx.stroke();
   ctx.restore();
 }
