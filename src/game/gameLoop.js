@@ -13,7 +13,8 @@ const DEBUG = {
 const ZOOM = {
   MIN: 0.4,
   MAX: 2.0,
-  SPEED: 0.7
+  SPEED: 0.7,
+  WHEEL_STEP: 0.12
 };
 
 const MINIMAP = {
@@ -40,7 +41,12 @@ const BEARING = {
   FUEL_SIZE: 3,
   SCAN_PRIMARY_ALPHA: 0.8,
   SCAN_SECONDARY_ALPHA: 0.45,
-  FUEL_ALPHA: 0.3
+  FUEL_ALPHA: 0.3,
+  DANGER_ALPHA: 0.85,
+  DANGER_PULSE_SPEED: 0.012,
+  DANGER_FLICKER_SPEED: 0.045,
+  DANGER_DRIFT_SPEED: 0.006,
+  FUEL_MAX_DOTS: 3
 };
 const SCAN_PULSE = {
   PERIOD: 2400,
@@ -474,15 +480,21 @@ function drawStarfield(ctx, starfield, offsetX, offsetY, width, height) {
   ctx.drawImage(starfield, ox + width, oy + height);
 }
 
-function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, screenW, screenH) {
+function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, screenW, screenH, isCompact) {
   if (!activeSectors || activeSectors.length === 0) {
     return;
   }
-  const size = MINIMAP.SIZE;
+  const base = Math.min(screenW, screenH);
+  const edge = isCompact ? 12 : 20;
+  const maxSize = Math.min(screenW - edge * 2, screenH - edge * 2);
+  const desiredSize = isCompact
+    ? Math.min(MINIMAP.SIZE, Math.round(base * 0.28))
+    : MINIMAP.SIZE;
+  const size = Math.max(120, Math.min(desiredSize, maxSize));
   const range = MINIMAP.RANGE;
 
-  const x0 = screenW - size - 20;
-  const y0 = 20;
+  const x0 = screenW - size - edge;
+  const y0 = edge;
   const cx = x0 + size / 2;
   const cy = y0 + size / 2;
 
@@ -715,6 +727,12 @@ export function startGame(canvas, ctx, onGameOver) {
   };
   const mouseAimStorageKey = "spaceSurveyor_mouseAim";
   let mouseAimEnabled = true;
+  let wheelZoomStep = 0;
+  const pinch = {
+    active: false,
+    startDist: 0,
+    startZoom: 1
+  };
 
   try {
     const stored = localStorage.getItem(mouseAimStorageKey);
@@ -751,6 +769,13 @@ export function startGame(canvas, ctx, onGameOver) {
   const onContextMenu = (event) => {
     event.preventDefault();
   };
+  const onWheel = (event) => {
+    if (event.deltaY === 0) {
+      return;
+    }
+    event.preventDefault();
+    wheelZoomStep += (event.deltaY > 0 ? -1 : 1) * ZOOM.WHEEL_STEP;
+  };
   const getTouchPosition = (touchEvent) => {
     const rect = canvas.getBoundingClientRect();
     const scaleX = rect.width > 0 ? canvas.width / rect.width : 1;
@@ -759,6 +784,33 @@ export function startGame(canvas, ctx, onGameOver) {
       x: (touchEvent.clientX - rect.left) * scaleX,
       y: (touchEvent.clientY - rect.top) * scaleY
     };
+  };
+  const getPinchDistance = (touches) => {
+    if (!touches || touches.length < 2) {
+      return 0;
+    }
+    const a = getTouchPosition(touches[0]);
+    const b = getTouchPosition(touches[1]);
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  };
+  const startPinch = (touches) => {
+    pinch.active = true;
+    pinch.startDist = getPinchDistance(touches);
+    pinch.startZoom = camera.zoom;
+  };
+  const updatePinch = (touches) => {
+    if (!pinch.active || touches.length < 2 || pinch.startDist <= 0) {
+      return;
+    }
+    const dist = getPinchDistance(touches);
+    const ratio = dist / pinch.startDist;
+    const target = pinch.startZoom * ratio;
+    camera.zoom = Math.max(ZOOM.MIN, Math.min(ZOOM.MAX, target));
+  };
+  const endPinch = (touches) => {
+    if (!touches || touches.length < 2) {
+      pinch.active = false;
+    }
   };
   const onTouchStart = (event) => {
     event.preventDefault();
@@ -776,6 +828,9 @@ export function startGame(canvas, ctx, onGameOver) {
         touch.isActive = true;
       }
     }
+    if (!pinch.active && event.touches.length >= 2) {
+      startPinch(event.touches);
+    }
   };
   const onTouchMove = (event) => {
     event.preventDefault();
@@ -785,6 +840,12 @@ export function startGame(canvas, ctx, onGameOver) {
         touch.moveX = pos.x;
         touch.moveY = pos.y;
       }
+    }
+    if (event.touches.length >= 2) {
+      if (!pinch.active) {
+        startPinch(event.touches);
+      }
+      updatePinch(event.touches);
     }
   };
   const onTouchEnd = (event) => {
@@ -799,6 +860,7 @@ export function startGame(canvas, ctx, onGameOver) {
     if (touch.moveId === null && touch.fireId === null) {
       touch.isActive = false;
     }
+    endPinch(event.touches);
   };
   const onToggleMouseAim = (event) => {
     if (event.key.toLowerCase() !== "m") {
@@ -819,6 +881,7 @@ export function startGame(canvas, ctx, onGameOver) {
   canvas.addEventListener("touchcancel", onTouchEnd, { passive: false });
   window.addEventListener("keydown", onToggleMouseAim);
   canvas.addEventListener("contextmenu", onContextMenu);
+  canvas.addEventListener("wheel", onWheel, { passive: false });
 
   function cleanupMouseControls() {
     window.removeEventListener("mousemove", onMouseMove);
@@ -830,6 +893,7 @@ export function startGame(canvas, ctx, onGameOver) {
     canvas.removeEventListener("touchcancel", onTouchEnd);
     window.removeEventListener("keydown", onToggleMouseAim);
     canvas.removeEventListener("contextmenu", onContextMenu);
+    canvas.removeEventListener("wheel", onWheel);
   }
 
   function respawn() {
@@ -901,11 +965,14 @@ export function startGame(canvas, ctx, onGameOver) {
 
   function rollBackgroundType() {
     const typeRoll = Math.random();
-    if (typeRoll < 0.22) return "supernova";
-    if (typeRoll < 0.45) return "nebulaBurst";
-    if (typeRoll < 0.7) return "meteor";
-    if (typeRoll < 0.85) return "warp";
-    return "quasar";
+    if (typeRoll < 0.2) return "supernova";
+    if (typeRoll < 0.4) return "nebulaBurst";
+    if (typeRoll < 0.62) return "meteor";
+    if (typeRoll < 0.76) return "warp";
+    if (typeRoll < 0.88) return "quasar";
+    if (typeRoll < 0.92) return "neonRibbon";
+    if (typeRoll < 0.96) return "jellySlab";
+    return "chromaEddy";
   }
 
   function pickBackgroundType() {
@@ -961,6 +1028,26 @@ export function startGame(canvas, ctx, onGameOver) {
       base.duration = randomRange(2.2, 4.4) * scale;
       base.radius = randomRange(60, 140) * scale;
       base.maxRadius = base.radius + randomRange(220, 420) * scale;
+    } else if (type === "neonRibbon") {
+      base.duration = randomRange(7, 12) * scale;
+      base.angle = randomRange(0, Math.PI * 2);
+      base.length = randomRange(240, 520) * scale;
+      base.width = randomRange(10, 20) * scale;
+      base.bend = randomRange(18, 52) * scale;
+      base.phase = randomRange(0, Math.PI * 2);
+    } else if (type === "jellySlab") {
+      base.duration = randomRange(8, 14) * scale;
+      base.width = randomRange(140, 280) * scale;
+      base.height = randomRange(70, 150) * scale;
+      base.rotation = randomRange(0, Math.PI * 2);
+      base.phase = randomRange(0, Math.PI * 2);
+    } else if (type === "chromaEddy") {
+      base.duration = randomRange(9, 16) * scale;
+      base.radius = randomRange(60, 150) * scale;
+      base.orbCount = Math.max(3, Math.floor(randomRange(3, 6)));
+      base.orbSize = randomRange(12, 26) * scale;
+      base.spin = randomRange(-0.7, 0.7);
+      base.phase = randomRange(0, Math.PI * 2);
     }
 
     return base;
@@ -1498,12 +1585,13 @@ function render() {
   ctx.scale(hudScale, hudScale);
   const hudW = canvas.width / hudScale;
   const hudH = canvas.height / hudScale;
+  const isCompactHud = Math.min(canvas.width, canvas.height) < 820;
   const controlLabel = touch.isActive
     ? "CTRL: TOUCH + KEYS"
     : (mouseAimEnabled ? "CTRL: MOUSE + KEYS" : "CTRL: KEYS");
-  drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, hudW, hudH);
-  drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, hudW, hudH);
-  drawFuelGauge(ctx, ship, hudW, hudH);
+  drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, enemiesInRange, hudW, hudH);
+  drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, hudW, hudH, isCompactHud);
+  drawFuelGauge(ctx, ship, hudW, hudH, isCompactHud);
   drawStatusHud(
     ctx,
     ship,
@@ -1512,10 +1600,10 @@ function render() {
     timeSpent,
     hudW,
     hudH,
-    controlLabel
+    controlLabel,
+    isCompactHud
   );
-  drawScoreHud(ctx, score, scoreMultiplier, scorePulse, hudW, hudH);
-  drawCompassHud(ctx, ship, activeSectors, enemies, fuelPickups, hudW, hudH);
+  drawScoreHud(ctx, score, scoreMultiplier, scorePulse, hudW, hudH, isCompactHud);
   drawAlerts(ctx, hudW, hudH);
   ctx.restore();
   drawMouseReticle(ctx, mouse, canvas.width, canvas.height, mouseAimEnabled);
@@ -1673,15 +1761,16 @@ function drawNavHud(ctx, ship, target, label, screenW, screenH) {
   ctx.restore();
 }
 
-function drawFuelGauge(ctx, ship, screenW, screenH) {
-  const panelW = 320;
-  const panelH = 78;
-  const x = 20;
-  const y = screenH - panelH - 16;
+function drawFuelGauge(ctx, ship, screenW, screenH, isCompact) {
+  const edge = isCompact ? 12 : 20;
+  const panelW = Math.min(isCompact ? 260 : 320, screenW - edge * 2);
+  const panelH = isCompact ? 70 : 78;
+  const x = edge;
+  const y = screenH - panelH - (isCompact ? 10 : 16);
   const barW = panelW - 24;
-  const barH = 10;
+  const barH = isCompact ? 9 : 10;
   const barX = x + 12;
-  const barY = y + panelH - 18;
+  const barY = y + panelH - (isCompact ? 16 : 18);
   const ratio = ship.maxFuel > 0 ? ship.fuel / ship.maxFuel : 0;
   const fillWidth = Math.max(0, Math.min(1, ratio)) * barW;
   const depleted = ship.fuel <= 0;
@@ -1718,7 +1807,7 @@ function drawFuelGauge(ctx, ship, screenW, screenH) {
   ctx.fillRect(barX, barY, fillWidth, barH);
 
   ctx.fillStyle = HUD_COLORS.PANEL_MUTED;
-  ctx.font = `12px ${HUD_FONT}`;
+  ctx.font = `${isCompact ? 11 : 12}px ${HUD_FONT}`;
   ctx.textAlign = "left";
   ctx.fillText("FUEL", barX + 20, y + 18);
   ctx.textAlign = "right";
@@ -1727,44 +1816,110 @@ function drawFuelGauge(ctx, ship, screenW, screenH) {
 
   if (depleted) {
     ctx.fillStyle = HUD_COLORS.WARNING;
-    ctx.font = `11px ${HUD_FONT}`;
+    ctx.font = `${isCompact ? 10 : 11}px ${HUD_FONT}`;
     ctx.textAlign = "right";
     ctx.fillText("Press Q to restart", x + panelW - 12, y + panelH - 8);
   }
   ctx.restore();
 }
 
-function drawStatusHud(ctx, ship, lives, surveyed, timeSpent, screenW, screenH, controlLabel = "") {
+function drawStatusHud(ctx, ship, lives, surveyed, timeSpent, screenW, screenH, controlLabel = "", isCompact = false) {
   const speed = Math.hypot(ship.vx, ship.vy);
   let headingDeg = (ship.heading * 180) / Math.PI;
   headingDeg = ((headingDeg % 360) + 360) % 360;
+  const edge = isCompact ? 12 : 18;
+  const labels = isCompact
+    ? {
+      lives: "LIV",
+      surveyed: "SURV",
+      time: "TIME",
+      speed: "SPD",
+      heading: "HDG"
+    }
+    : {
+      lives: "LIVES",
+      surveyed: "SURVEYED",
+      time: "TIME",
+      speed: "SPEED",
+      heading: "HEADING"
+    };
+  const lines = [
+    { label: labels.lives, value: lives },
+    { label: labels.surveyed, value: surveyed },
+    { label: labels.time, value: `${timeSpent.toFixed(1)}s` },
+    { label: labels.speed, value: speed.toFixed(1) },
+    { label: labels.heading, value: `${headingDeg.toFixed(0)}deg` }
+  ];
+  const showControls = !isCompact && controlLabel;
+  const lineH = isCompact ? 16 : 18;
+  const basePad = isCompact ? 12 : 16;
+  const panelW = Math.min(isCompact ? 240 : 280, screenW - edge * 2);
+  const panelH = basePad * 2 + lineH * lines.length + (showControls ? lineH : 0);
+  const x = edge;
+  const y = edge;
 
   ctx.save();
-  ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
-  ctx.font = `16px ${HUD_FONT}`;
-  ctx.textAlign = "left";
-  ctx.fillText(`Lives: ${lives}`, 20, 24);
-  ctx.fillText(`Surveyed: ${surveyed}`, 20, 44);
-  ctx.fillText(`Time: ${timeSpent.toFixed(1)}s`, 20, 64);
-  ctx.fillText(`Speed: ${speed.toFixed(1)}`, 20, 84);
-  ctx.fillText(`Heading: ${headingDeg.toFixed(0)}deg`, 20, 104);
-  if (controlLabel) {
+  const panelGrad = ctx.createLinearGradient(x, y, x + panelW, y + panelH);
+  panelGrad.addColorStop(0, HUD_COLORS.PANEL_START);
+  panelGrad.addColorStop(1, HUD_COLORS.PANEL_END);
+
+  ctx.beginPath();
+  ctx.moveTo(x + 14, y);
+  ctx.lineTo(x + panelW, y);
+  ctx.lineTo(x + panelW - 12, y + panelH);
+  ctx.lineTo(x, y + panelH);
+  ctx.closePath();
+  ctx.fillStyle = panelGrad;
+  ctx.fill();
+  ctx.strokeStyle = HUD_COLORS.PANEL_STROKE;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.strokeStyle = HUD_COLORS.PANEL_TICK;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x + 10, y + 8);
+  ctx.lineTo(x + panelW - 10, y + 8);
+  ctx.stroke();
+
+  const labelX = x + 16;
+  const valueX = x + panelW - 14;
+  let cursorY = y + basePad + lineH - 4;
+  for (const line of lines) {
+    ctx.textAlign = "left";
     ctx.fillStyle = HUD_COLORS.PANEL_MUTED;
-    ctx.font = `12px ${HUD_FONT}`;
-    ctx.fillText(controlLabel, 20, 124);
+    ctx.font = `${isCompact ? 11 : 12}px ${HUD_FONT}`;
+    ctx.fillText(line.label, labelX, cursorY);
+    ctx.textAlign = "right";
+    ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
+    ctx.font = `${isCompact ? 14 : 16}px ${HUD_FONT}`;
+    ctx.fillText(line.value, valueX, cursorY);
+    cursorY += lineH;
+  }
+
+  if (showControls) {
+    ctx.textAlign = "left";
+    ctx.fillStyle = HUD_COLORS.PANEL_MUTED;
+    ctx.font = `${isCompact ? 10 : 11}px ${HUD_FONT}`;
+    ctx.fillText(controlLabel, labelX, cursorY + 2);
   }
   ctx.restore();
 }
 
-function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH) {
+function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH, isCompact) {
   const displayScore = Math.max(0, Math.floor(score));
   const scoreText = displayScore.toString().padStart(7, "0");
-  const panelW = 320;
-  const panelH = 78;
-  const x = screenW - panelW - 18;
-  const y = screenH - panelH - 16;
-  const labelX = x + 30;
-  const labelY = y + 18;
+  const edge = isCompact ? 12 : 18;
+  const panelW = Math.min(isCompact ? 260 : 320, screenW - edge * 2);
+  const panelH = isCompact ? 70 : 78;
+  const x = screenW - panelW - edge;
+  const y = screenH - panelH - (isCompact ? 10 : 16);
+  const labelX = x + 24;
+  const labelY = y + (isCompact ? 16 : 18);
+  const scoreFont = isCompact ? 24 : 28;
+  const labelFont = isCompact ? 11 : 12;
+  const badgeFont = isCompact ? 14 : 16;
+  const badgeLabelFont = isCompact ? 9 : 10;
   const time = performance.now();
   const ringPulse = 0.4 + 0.6 * Math.abs(Math.sin(time / 220));
   const ringRatio = Math.min(1, (multiplier - 1) / 6);
@@ -1795,12 +1950,12 @@ function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH) {
   ctx.stroke();
 
   ctx.textAlign = "left";
-  ctx.fillStyle = HUD_COLORS.PANEL_MUTED;
-  ctx.font = `12px ${HUD_FONT}`;
+  ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
+  ctx.font = `${labelFont}px ${HUD_FONT}`;
   ctx.fillText("SCORE", labelX, labelY);
 
   const scoreX = labelX;
-  const scoreY = y + 54;
+  const scoreY = y + (isCompact ? 50 : 54);
   const pulseT = Math.min(1, pulse / 1.2);
   const pulseEase = Math.pow(pulseT, 0.75);
   const pulseScale = 1 + pulseEase * 0.26;
@@ -1829,11 +1984,27 @@ function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH) {
     ctx.fillRect(bar2X, bar2Y, bar2W, bar2H);
   }
 
-  ctx.font = `28px ${HUD_FONT}`;
+  ctx.font = `bold ${scoreFont}px ${HUD_FONT}`;
+  const scoreMetrics = ctx.measureText(scoreText);
+  const platePadX = isCompact ? 18 : 22;
+  const platePadY = isCompact ? 8 : 10;
+  const plateW = scoreMetrics.width + platePadX * 2;
+  const plateH = scoreFont + platePadY * 2;
+  const plateX = scoreX - platePadX;
+  const plateY = scoreY - scoreFont - platePadY + 4;
+  const plateGrad = ctx.createLinearGradient(plateX, plateY, plateX + plateW, plateY + plateH);
+  plateGrad.addColorStop(0, "rgba(6, 10, 12, 0.92)");
+  plateGrad.addColorStop(1, "rgba(12, 18, 22, 0.88)");
+  ctx.fillStyle = plateGrad;
+  ctx.fillRect(plateX, plateY, plateW, plateH);
+  ctx.strokeStyle = "rgba(220, 235, 235, 0.3)";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(plateX, plateY, plateW, plateH);
+
   ctx.save();
-  ctx.shadowColor = HUD_COLORS.ACCENT_GLOW;
-  ctx.shadowBlur = glow;
-  ctx.fillStyle = "rgba(120, 200, 190, 0.6)";
+  ctx.shadowColor = "rgba(255, 255, 255, 0.9)";
+  ctx.shadowBlur = glow + 10;
+  ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
   ctx.translate(scoreX, scoreY);
   ctx.scale(pulseScale, pulseScale);
   ctx.fillText(scoreText, 0, 0);
@@ -1841,21 +2012,21 @@ function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH) {
 
   ctx.save();
   ctx.shadowBlur = 0;
-  ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
+  ctx.fillStyle = "rgba(255, 255, 255, 1)";
   ctx.translate(scoreX, scoreY);
   ctx.scale(pulseScale, pulseScale);
   ctx.fillText(scoreText, 0, 0);
   ctx.restore();
-  ctx.strokeStyle = "rgba(6, 20, 24, 0.9)";
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.85)";
+  ctx.lineWidth = 3.5;
   ctx.save();
   ctx.translate(scoreX, scoreY);
   ctx.scale(pulseScale, pulseScale);
   ctx.strokeText(scoreText, 0, 0);
   ctx.restore();
 
-  const badgeR = 15;
-  const badgeX = x + panelW - 38;
+  const badgeR = isCompact ? 13 : 15;
+  const badgeX = x + panelW - (isCompact ? 34 : 38);
   const badgeY = y + panelH / 2 + 6;
   const badgeGrad = ctx.createRadialGradient(
     badgeX - 4,
@@ -1890,10 +2061,10 @@ function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH) {
 
   ctx.textAlign = "center";
   ctx.fillStyle = "rgba(8, 12, 16, 0.9)";
-  ctx.font = `16px ${HUD_FONT}`;
+  ctx.font = `${badgeFont}px ${HUD_FONT}`;
   ctx.fillText(`x${multiplier}`, badgeX, badgeY + 6);
   ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
-  ctx.font = `10px ${HUD_FONT}`;
+  ctx.font = `${badgeLabelFont}px ${HUD_FONT}`;
   ctx.fillText("MULTI", badgeX, labelY);
 
   ctx.restore();
@@ -2146,7 +2317,7 @@ function drawScanPulse(ctx, ship, activeSectors, timeMs, viewRadius) {
   ctx.restore();
 }
 
-function drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, screenW, screenH) {
+function drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, enemiesInRange, screenW, screenH) {
   if (!activeSectors || activeSectors.length === 0) {
     return;
   }
@@ -2164,7 +2335,8 @@ function drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, screenW, s
   scanTargets.sort((a, b) => a.dist2 - b.dist2);
 
   const hasFuel = fuelPickups && fuelPickups.length > 0;
-  if (scanTargets.length === 0 && !hasFuel) {
+  const hasEnemies = enemiesInRange && enemiesInRange.length > 0;
+  if (scanTargets.length === 0 && !hasFuel && !hasEnemies) {
     return;
   }
 
@@ -2173,6 +2345,8 @@ function drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, screenW, s
   const scanColor = HUD_COLORS.ACCENT;
   const scanGlow = HUD_COLORS.ACCENT_GLOW;
   const fuelColor = HUD_COLORS.PANEL_TEXT;
+  const dangerColor = HUD_COLORS.ENEMY;
+  const dangerGlow = "rgba(255, 90, 90, 0.9)";
 
   function drawDot(angle, size, alpha, color, glow) {
     const x = centerX + Math.cos(angle) * BEARING.RADIUS;
@@ -2190,10 +2364,18 @@ function drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, screenW, s
     ctx.restore();
   }
 
-  function drawChevronPair(angle, alpha, scale = 1, phase = 0) {
+  function drawChevronPair(angle, alpha, scale = 1, phase = 0, style = null) {
     const time = performance.now();
-    const pulse = 0.85 + 0.15 * Math.sin(time * BEARING.PULSE_SPEED + phase);
-    const drift = Math.sin(time * BEARING.DRIFT_SPEED + phase) * BEARING.DRIFT_AMPLITUDE;
+    const pulseBase = style?.pulseBase ?? 0.85;
+    const pulseRange = style?.pulseRange ?? 0.15;
+    const pulseSpeed = style?.pulseSpeed ?? BEARING.PULSE_SPEED;
+    const driftSpeed = style?.driftSpeed ?? BEARING.DRIFT_SPEED;
+    const driftAmp = style?.driftAmp ?? BEARING.DRIFT_AMPLITUDE;
+    let pulse = pulseBase + pulseRange * Math.sin(time * pulseSpeed + phase);
+    if (style?.flickerSpeed) {
+      pulse *= 0.75 + 0.25 * Math.sin(time * style.flickerSpeed + phase * 1.7);
+    }
+    const drift = Math.sin(time * driftSpeed + phase) * driftAmp;
     const radius = BEARING.RADIUS + drift;
     const x = centerX + Math.cos(angle) * radius;
     const y = centerY + Math.sin(angle) * radius;
@@ -2205,12 +2387,12 @@ function drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, screenW, s
     ctx.translate(x, y);
     ctx.rotate(angle);
     ctx.globalAlpha = alpha * pulse;
-    ctx.strokeStyle = scanColor;
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = style?.color ?? scanColor;
+    ctx.lineWidth = style?.lineWidth ?? 2;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    ctx.shadowColor = scanGlow;
-    ctx.shadowBlur = 8;
+    ctx.shadowColor = style?.glow ?? scanGlow;
+    ctx.shadowBlur = style?.glowBlur ?? 8;
 
     const drawChevron = (offset) => {
       ctx.beginPath();
@@ -2225,21 +2407,68 @@ function drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, screenW, s
     ctx.restore();
   }
 
+  const scanStyle = {
+    color: scanColor,
+    glow: scanGlow,
+    lineWidth: 2,
+    glowBlur: 8,
+    pulseBase: 0.85,
+    pulseRange: 0.15,
+    pulseSpeed: BEARING.PULSE_SPEED,
+    driftSpeed: BEARING.DRIFT_SPEED,
+    driftAmp: BEARING.DRIFT_AMPLITUDE
+  };
+  const dangerStyle = {
+    color: dangerColor,
+    glow: dangerGlow,
+    lineWidth: 2.6,
+    glowBlur: 12,
+    pulseBase: 0.7,
+    pulseRange: 0.4,
+    pulseSpeed: BEARING.DANGER_PULSE_SPEED,
+    flickerSpeed: BEARING.DANGER_FLICKER_SPEED,
+    driftSpeed: BEARING.DANGER_DRIFT_SPEED,
+    driftAmp: BEARING.DRIFT_AMPLITUDE * 1.4
+  };
+
   if (scanTargets.length > 0) {
     const primary = scanTargets[0];
     const angle = Math.atan2(primary.y - ship.y, primary.x - ship.x);
-    drawChevronPair(angle, BEARING.SCAN_PRIMARY_ALPHA, 1, 0);
+    drawChevronPair(angle, BEARING.SCAN_PRIMARY_ALPHA, 1, 0, scanStyle);
   }
   if (scanTargets.length > 1) {
     const secondary = scanTargets[1];
     const angle = Math.atan2(secondary.y - ship.y, secondary.x - ship.x);
-    drawChevronPair(angle, BEARING.SCAN_SECONDARY_ALPHA, 0.85, Math.PI / 2);
+    drawChevronPair(angle, BEARING.SCAN_SECONDARY_ALPHA, 0.85, Math.PI / 2, scanStyle);
+  }
+
+  if (hasEnemies) {
+    enemiesInRange.forEach((enemy, index) => {
+      const dx = enemy.x - ship.x;
+      const dy = enemy.y - ship.y;
+      const dist = Math.hypot(dx, dy);
+      const distScale = 0.5 + 0.5 * (1 - Math.min(1, dist / MINIMAP.RANGE));
+      const angle = Math.atan2(dy, dx);
+      const phase = index * (Math.PI / 3);
+      drawChevronPair(angle, BEARING.DANGER_ALPHA * distScale, 1.05, phase, dangerStyle);
+    });
   }
 
   if (hasFuel) {
-    for (const fuel of fuelPickups) {
-      const angle = Math.atan2(fuel.y - ship.y, fuel.x - ship.x);
-      drawDot(angle, BEARING.FUEL_SIZE, BEARING.FUEL_ALPHA, fuelColor);
+    const nearestFuel = fuelPickups
+      .map((fuel) => {
+        const dx = fuel.x - ship.x;
+        const dy = fuel.y - ship.y;
+        return {
+          angle: Math.atan2(dy, dx),
+          dist2: dx * dx + dy * dy
+        };
+      })
+      .sort((a, b) => a.dist2 - b.dist2)
+      .slice(0, BEARING.FUEL_MAX_DOTS);
+
+    for (const fuel of nearestFuel) {
+      drawDot(fuel.angle, BEARING.FUEL_SIZE, BEARING.FUEL_ALPHA, fuelColor);
     }
   }
 }
@@ -2438,6 +2667,87 @@ function drawBackgroundEvents(ctx, events, clock, ship, screenW, screenH) {
       ctx.beginPath();
       ctx.arc(screenX, screenY, radius * 0.7, 0, Math.PI * 2);
       ctx.stroke();
+      ctx.restore();
+    } else if (evt.type === "neonRibbon") {
+      const wave = Math.sin(clock * 0.35 + evt.phase) * evt.bend;
+      const wave2 = Math.cos(clock * 0.25 + evt.phase) * evt.bend * 0.7;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = alpha * 0.5;
+      ctx.translate(screenX, screenY);
+      ctx.rotate(evt.angle + wobble * 0.7);
+      const grad = ctx.createLinearGradient(-evt.length / 2, 0, evt.length / 2, 0);
+      grad.addColorStop(0, rgba(colorA, 0, hueShift));
+      grad.addColorStop(0.45, rgba(colorB, 0.9, hueShift));
+      grad.addColorStop(1, rgba(colorC, 0, hueShift));
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = evt.width;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(-evt.length / 2, 0);
+      ctx.bezierCurveTo(-evt.length / 6, wave, evt.length / 6, wave2, evt.length / 2, 0);
+      ctx.stroke();
+
+      ctx.globalAlpha = alpha * 0.25;
+      ctx.strokeStyle = rgba(colorB, 0.6, hueShift);
+      ctx.lineWidth = evt.width * 2.1;
+      ctx.beginPath();
+      ctx.moveTo(-evt.length / 2, 0);
+      ctx.bezierCurveTo(-evt.length / 6, wave, evt.length / 6, wave2, evt.length / 2, 0);
+      ctx.stroke();
+      ctx.restore();
+    } else if (evt.type === "jellySlab") {
+      const pulse = 0.92 + 0.08 * Math.sin(clock * 0.25 + evt.phase);
+      const width = evt.width * pulse;
+      const height = evt.height * (0.9 + 0.1 * Math.cos(clock * 0.28 + evt.phase));
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = alpha * 0.45;
+      ctx.translate(screenX, screenY);
+      ctx.rotate(evt.rotation + wobble * 0.4);
+      ctx.save();
+      ctx.scale(1, height / width);
+      const radius = width / 2;
+      const grad = ctx.createRadialGradient(0, 0, radius * 0.2, 0, 0, radius);
+      grad.addColorStop(0, rgba(colorA, 0.6, hueShift));
+      grad.addColorStop(0.6, rgba(colorB, 0.35, hueShift));
+      grad.addColorStop(1, rgba(colorC, 0, hueShift));
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(0, 0, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      ctx.globalAlpha = alpha * 0.32;
+      ctx.strokeStyle = rgba(colorB, 0.8, hueShift);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-width * 0.35, -height * 0.12);
+      ctx.quadraticCurveTo(0, height * 0.05, width * 0.35, height * 0.12);
+      ctx.stroke();
+      ctx.restore();
+    } else if (evt.type === "chromaEddy") {
+      const spin = evt.spin * (0.7 + 0.3 * Math.sin(clock * 0.25 + evt.phase));
+      const baseAngle = t * Math.PI * 2 * spin + evt.phase;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.translate(screenX, screenY);
+      for (let i = 0; i < evt.orbCount; i++) {
+        const angle = baseAngle + (i * Math.PI * 2) / evt.orbCount;
+        const dist = evt.radius * (0.6 + 0.4 * Math.sin(t * Math.PI * 2 + i));
+        const ox = Math.cos(angle) * dist;
+        const oy = Math.sin(angle) * dist;
+        const size = evt.orbSize * (0.7 + 0.3 * Math.sin(clock * 0.4 + i));
+        const orb = ctx.createRadialGradient(ox, oy, 0, ox, oy, size);
+        orb.addColorStop(0, rgba(colorA, 0.8, hueShift));
+        orb.addColorStop(0.6, rgba(colorB, 0.45, hueShift));
+        orb.addColorStop(1, rgba(colorC, 0, hueShift));
+        ctx.globalAlpha = alpha * 0.5;
+        ctx.fillStyle = orb;
+        ctx.beginPath();
+        ctx.arc(ox, oy, size, 0, Math.PI * 2);
+        ctx.fill();
+      }
       ctx.restore();
     }
   }
@@ -2980,10 +3290,12 @@ function spawnEnemyChunks(enemy) {
     let zoomDir = 0;
     if (keys["z"]) zoomDir -= 1;
     if (keys["x"]) zoomDir += 1;
-    if (zoomDir === 0) {
+    const zoomDelta = zoomDir * ZOOM.SPEED * dt + wheelZoomStep;
+    if (zoomDelta === 0) {
       return;
     }
-    camera.zoom += zoomDir * ZOOM.SPEED * dt;
+    wheelZoomStep = 0;
+    camera.zoom += zoomDelta;
     if (camera.zoom < ZOOM.MIN) camera.zoom = ZOOM.MIN;
     if (camera.zoom > ZOOM.MAX) camera.zoom = ZOOM.MAX;
   }
