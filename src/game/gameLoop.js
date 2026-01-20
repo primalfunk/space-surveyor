@@ -197,10 +197,7 @@ const THRUST_PARTICLES = {
 };
 const TRAIL_DISPERSE = {
   BASE_WIDTH: 3,
-  SPREAD: 10,
-  GLOW_WIDTH: 8,
-  BLUR_BASE: 6,
-  BLUR_SPREAD: 12
+  SPREAD: 10
 };
 const TRAIL_SPARKS = {
   RATE: 18,
@@ -1451,23 +1448,18 @@ function drawTrail(ctx, trail, speed = 0) {
   ctx.restore();
 
   ctx.save();
-  ctx.globalCompositeOperation = "lighter";
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  ctx.lineWidth = TRAIL_DISPERSE.GLOW_WIDTH;
   for (let i = 1; i < trail.length; i++) {
     const a = trail[i - 1];
     const b = trail[i];
     const t = i / (trail.length - 1);
     const alpha = (0.08 + 0.35 * t) * (0.5 + speedRatio * 0.6);
     const width = TRAIL_DISPERSE.BASE_WIDTH + t * TRAIL_DISPERSE.SPREAD;
-    const blur = TRAIL_DISPERSE.BLUR_BASE + t * TRAIL_DISPERSE.BLUR_SPREAD;
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
     ctx.lineWidth = width;
-    ctx.shadowColor = `rgba(${trailR}, ${trailG}, ${trailB}, ${alpha})`;
-    ctx.shadowBlur = blur;
     ctx.strokeStyle = `rgba(${trailR}, ${trailG}, ${trailB}, ${alpha})`;
     ctx.stroke();
   }
