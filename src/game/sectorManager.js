@@ -6,17 +6,20 @@ import { clamp, createRng, hashInts, pickWeighted, randomInt, randomRange } from
 import { getSectorMeta, saveSectorIndex, setSectorMeta } from "./sectorIndex.js";
 import { saveGameState } from "./gameState.js";
 import { CONFIG } from "./config.js";
+import { getFieldTypeForSector } from "./riverNetwork.js";
 
 export const SECTOR_SIZE = CONFIG.SECTOR.SIZE;
 export const SECTOR_TYPES = CONFIG.SECTOR.TYPES;
 
-const { SECTOR, STAR: STAR_CONFIG, ASTEROID, GOAL, END_ZONE } = CONFIG;
+const { SECTOR, STAR: STAR_CONFIG, ASTEROID, GOAL, END_ZONE, FIELD } = CONFIG;
 const STAR_GEN = STAR_CONFIG.GENERATION;
 const STAR = STAR_GEN;
 const STAR_WELL = STAR_GEN.WELL;
 const STAR_ROTATION = STAR_GEN.ROTATION;
 const STAR_PULSE = STAR_GEN.PULSE;
 const STAR_TYPES = STAR_GEN.TYPES;
+const STAR_PLACEMENT = STAR_GEN.PLACEMENT;
+const STAR_MOTION = STAR_CONFIG.MOTION;
 const ASTEROIDS = ASTEROID.GENERATION;
 const ASTEROID_CLUSTER = ASTEROID.GENERATION.CLUSTER;
 const ENTRY_SAFE_RADIUS = SECTOR.ENTRY_SAFE_RADIUS;
@@ -30,6 +33,8 @@ const SPAWN_PROFILES = SECTOR.SPAWN_PROFILES;
 const SEED_SALT = SECTOR.SEED_SALT;
 const STAR_RATE_MULTIPLIER = STAR_GEN.RATE_MULTIPLIER;
 const ZONES = SECTOR.ZONES;
+const FIELD_TYPES = FIELD.TYPES;
+const PATTERN_VERSION = 1;
 
 
 function randomPointInBounds(rng, bounds, margin) {
@@ -251,7 +256,143 @@ function getStarCountsForRing(ring) {
   };
 }
 
-function generateStars(rng, bounds, ring, starMultiplier, safePoint, safeRadius) {
+function getPatternBehaviorForField(fieldType) {
+  if (fieldType === FIELD_TYPES.GEOMETRIC_LATTICE) return "ORTHOGONAL_BEHAVIOR";
+  if (fieldType === FIELD_TYPES.GEOMETRIC_RADIAL) return "RADIAL_BEHAVIOR";
+  if (fieldType === FIELD_TYPES.BRAIDED_FLOW) return "LINEAR_BEHAVIOR";
+  if (fieldType === FIELD_TYPES.CHAOTIC_CLUSTER) return "CLUSTER_BEHAVIOR";
+  if (fieldType === FIELD_TYPES.SPARSE_VOID) return "CHAOTIC_BEHAVIOR";
+  return "CHAOTIC_BEHAVIOR";
+}
+
+function getFieldTypeForPattern(patternId, fallback) {
+  if (patternId === "ORTHOGONAL_BEHAVIOR") return FIELD_TYPES.GEOMETRIC_LATTICE;
+  if (patternId === "RADIAL_BEHAVIOR") return FIELD_TYPES.GEOMETRIC_RADIAL;
+  if (patternId === "LINEAR_BEHAVIOR") return FIELD_TYPES.BRAIDED_FLOW;
+  if (patternId === "CLUSTER_BEHAVIOR") return FIELD_TYPES.CHAOTIC_CLUSTER;
+  if (patternId === "CHAOTIC_BEHAVIOR") return FIELD_TYPES.SPARSE_VOID;
+  return fallback ?? FIELD_TYPES.CHAOTIC_CLUSTER;
+}
+
+function createStarPattern(rng, bounds, fieldType, patternId) {
+  const resolvedField = getFieldTypeForPattern(patternId, fieldType);
+  const center = {
+    x: bounds.x + bounds.size / 2,
+    y: bounds.y + bounds.size / 2
+  };
+  if (resolvedField === FIELD_TYPES.GEOMETRIC_LATTICE) {
+    const gridCount = 3;
+    const spacing = bounds.size / (gridCount + 1);
+    return {
+      type: resolvedField,
+      center,
+      gridCount,
+      spacing,
+      jitter: spacing * 0.2
+    };
+  }
+  if (resolvedField === FIELD_TYPES.GEOMETRIC_RADIAL) {
+    return {
+      type: resolvedField,
+      center: {
+        x: center.x + (rng() - 0.5) * bounds.size * 0.08,
+        y: center.y + (rng() - 0.5) * bounds.size * 0.08
+      },
+      ringMin: bounds.size * 0.18,
+      ringMax: bounds.size * 0.38
+    };
+  }
+  if (resolvedField === FIELD_TYPES.BRAIDED_FLOW) {
+    const angle = rng() * Math.PI * 2;
+    const dir = { x: Math.cos(angle), y: Math.sin(angle) };
+    return {
+      type: resolvedField,
+      center,
+      dir,
+      cross: { x: -dir.y, y: dir.x },
+      span: bounds.size * 0.35,
+      spread: bounds.size * 0.2
+    };
+  }
+  if (resolvedField === FIELD_TYPES.CHAOTIC_CLUSTER) {
+    return {
+      type: resolvedField,
+      center: randomPointInBounds(rng, bounds, STAR.MARGIN),
+      clusterRadius: bounds.size * 0.28
+    };
+  }
+  return {
+    type: resolvedField,
+    center
+  };
+}
+
+function pickStarCandidate(rng, bounds, margin, pattern, starIndex) {
+  const type = pattern?.type;
+  if (type === FIELD_TYPES.GEOMETRIC_LATTICE) {
+    const col = randomInt(rng, 0, pattern.gridCount - 1);
+    const row = randomInt(rng, 0, pattern.gridCount - 1);
+    const jitterX = (rng() - 0.5) * pattern.jitter;
+    const jitterY = (rng() - 0.5) * pattern.jitter;
+    const x = bounds.x + pattern.spacing * (col + 1) + jitterX;
+    const y = bounds.y + pattern.spacing * (row + 1) + jitterY;
+    return {
+      x: clamp(x, bounds.x + margin, bounds.x + bounds.size - margin),
+      y: clamp(y, bounds.y + margin, bounds.y + bounds.size - margin)
+    };
+  }
+  if (type === FIELD_TYPES.GEOMETRIC_RADIAL) {
+    if (starIndex === 0) {
+      return {
+        x: clamp(pattern.center.x, bounds.x + margin, bounds.x + bounds.size - margin),
+        y: clamp(pattern.center.y, bounds.y + margin, bounds.y + bounds.size - margin)
+      };
+    }
+    const angle = rng() * Math.PI * 2;
+    const radius = randomRange(rng, pattern.ringMin, pattern.ringMax);
+    const x = pattern.center.x + Math.cos(angle) * radius;
+    const y = pattern.center.y + Math.sin(angle) * radius;
+    return {
+      x: clamp(x, bounds.x + margin, bounds.x + bounds.size - margin),
+      y: clamp(y, bounds.y + margin, bounds.y + bounds.size - margin)
+    };
+  }
+  if (type === FIELD_TYPES.BRAIDED_FLOW) {
+    const t = randomRange(rng, -1, 1);
+    const offset = randomRange(rng, -pattern.spread, pattern.spread);
+    const baseX = pattern.center.x + pattern.dir.x * t * pattern.span;
+    const baseY = pattern.center.y + pattern.dir.y * t * pattern.span;
+    const x = baseX + pattern.cross.x * offset;
+    const y = baseY + pattern.cross.y * offset;
+    return {
+      x: clamp(x, bounds.x + margin, bounds.x + bounds.size - margin),
+      y: clamp(y, bounds.y + margin, bounds.y + bounds.size - margin)
+    };
+  }
+  if (type === FIELD_TYPES.CHAOTIC_CLUSTER) {
+    const angle = rng() * Math.PI * 2;
+    const radius = randomRange(rng, 0, pattern.clusterRadius);
+    const x = pattern.center.x + Math.cos(angle) * radius;
+    const y = pattern.center.y + Math.sin(angle) * radius;
+    return {
+      x: clamp(x, bounds.x + margin, bounds.x + bounds.size - margin),
+      y: clamp(y, bounds.y + margin, bounds.y + bounds.size - margin)
+    };
+  }
+  return randomPointInBounds(rng, bounds, margin);
+}
+
+function generateStars(
+  rng,
+  bounds,
+  ring,
+  starMultiplier,
+  safePoint,
+  safeRadius,
+  fieldType,
+  patternInfo = {},
+  safetyTargets = null
+) {
   const stars = [];
   const counts = getStarCountsForRing(ring);
   const rateMultiplier = starMultiplier * STAR_RATE_MULTIPLIER;
@@ -260,93 +401,166 @@ function generateStars(rng, bounds, ring, starMultiplier, safePoint, safeRadius)
     yellow: scaleCountRange(counts.yellow, rateMultiplier),
     blue: scaleCountRange(counts.blue, rateMultiplier)
   };
-  const entries = [
-    {
-      type: "red",
-      count: randomInt(rng, scaled.red.min, scaled.red.max)
-    },
-    {
-      type: "yellow",
-      count: randomInt(rng, scaled.yellow.min, scaled.yellow.max)
-    },
-    {
-      type: "blue",
-      count: randomInt(rng, scaled.blue.min, scaled.blue.max)
+  const minCounts = {
+    red: scaled.red.min,
+    yellow: scaled.yellow.min,
+    blue: scaled.blue.min
+  };
+  const targetCounts = {
+    red: randomInt(rng, scaled.red.min, scaled.red.max),
+    yellow: randomInt(rng, scaled.yellow.min, scaled.yellow.max),
+    blue: randomInt(rng, scaled.blue.min, scaled.blue.max)
+  };
+  let starBudget = targetCounts.red + targetCounts.yellow + targetCounts.blue;
+  const minTotal = minCounts.red + minCounts.yellow + minCounts.blue;
+  const isSparseVoid = fieldType === FIELD_TYPES.SPARSE_VOID && ring <= FIELD.VOID_ALLOWED_MAX_RING;
+
+  if (isSparseVoid) {
+    if (rng() < FIELD.VOID_ZERO_STAR_PROB) {
+      return stars;
     }
-  ];
+    starBudget = 1;
+  } else if (starBudget < minTotal) {
+    starBudget = minTotal;
+  }
 
-  for (const entry of entries) {
-    const type = getStarTypeConfig(entry.type);
-    for (let i = 0; i < entry.count; i++) {
-      const baseMass = randomRange(rng, STAR.MASS_MIN, STAR.MASS_MAX);
-      const mass = applyVariance(rng, baseMass * type.massMultiplier, STAR_WELL.VARIANCE);
-      const gravityRadius = applyVariance(
-        rng,
-        STAR_WELL.BASE_RADIUS * type.wellMultiplier,
-        STAR_WELL.VARIANCE
-      );
-      const bodyRadius = STAR.BODY_RADIUS;
-      const [rotMin, rotMax] = getStarRotationRange(type.id);
-      const rotSpeed = randomRange(rng, rotMin, rotMax) * (rng() < 0.5 ? -1 : 1);
-      const pulseCfg = getStarPulseConfig(type.id);
-      const pulseSpeed = randomRange(rng, pulseCfg.speedMin, pulseCfg.speedMax);
-      const pulseAmount = pulseCfg.amount;
-      const pulsePhase = randomRange(rng, 0, Math.PI * 2);
-      const rotation = randomRange(rng, 0, Math.PI * 2);
+  const starPlan = [];
+  if (!isSparseVoid) {
+    for (const type of ["red", "yellow", "blue"]) {
+      for (let i = 0; i < minCounts[type]; i++) {
+        starPlan.push(type);
+      }
+    }
+  }
+  const remaining = Math.max(0, starBudget - starPlan.length);
+  const weightEntries = ["red", "yellow", "blue"].map((type) => {
+    const base = targetCounts[type] - (isSparseVoid ? 0 : minCounts[type]);
+    return { id: type, weight: Math.max(0, base) };
+  });
+  let weightTotal = weightEntries.reduce((sum, entry) => sum + entry.weight, 0);
+  if (weightTotal <= 0) {
+    weightEntries[0].weight = Math.max(1, targetCounts.red);
+    weightEntries[1].weight = Math.max(1, targetCounts.yellow);
+    weightEntries[2].weight = Math.max(1, targetCounts.blue);
+    weightTotal = weightEntries.reduce((sum, entry) => sum + entry.weight, 0);
+  }
+  for (let i = 0; i < remaining; i++) {
+    const nextType = pickWeighted(rng, weightEntries) ?? "red";
+    starPlan.push(nextType);
+  }
 
-      let pos = null;
-      for (let tries = 0; tries < 30; tries++) {
-        const candidate = randomPointInBounds(rng, bounds, STAR.MARGIN);
-        if (safePoint) {
-          const dx = candidate.x - safePoint.x;
-          const dy = candidate.y - safePoint.y;
-          const minDist = Math.max(safeRadius, gravityRadius + 200);
-          if (Math.hypot(dx, dy) < minDist) {
+  const patternSeed = Number.isFinite(patternInfo?.patternParamsSeed)
+    ? patternInfo.patternParamsSeed
+    : hashInts(Math.floor(bounds.x), Math.floor(bounds.y), ring, SEED_SALT.PATTERN);
+  const patternRng = createRng(patternSeed);
+  const pattern = createStarPattern(patternRng, bounds, fieldType, patternInfo?.patternId);
+  let starIndex = 0;
+  let failureStreak = 0;
+
+  for (const entry of starPlan) {
+    const type = getStarTypeConfig(entry);
+    const baseMass = randomRange(rng, STAR.MASS_MIN, STAR.MASS_MAX);
+    const mass = applyVariance(rng, baseMass * type.massMultiplier, STAR_WELL.VARIANCE);
+    const gravityRadius = applyVariance(
+      rng,
+      STAR_WELL.BASE_RADIUS * type.wellMultiplier,
+      STAR_WELL.VARIANCE
+    );
+    const bodyRadius = STAR.BODY_RADIUS;
+    const [rotMin, rotMax] = getStarRotationRange(type.id);
+    const rotSpeed = randomRange(rng, rotMin, rotMax) * (rng() < 0.5 ? -1 : 1);
+    const pulseCfg = getStarPulseConfig(type.id);
+    const pulseSpeed = randomRange(rng, pulseCfg.speedMin, pulseCfg.speedMax);
+    const pulseAmount = pulseCfg.amount;
+    const pulsePhase = randomRange(rng, 0, Math.PI * 2);
+    const rotation = randomRange(rng, 0, Math.PI * 2);
+    const motion = null;
+
+    let pos = null;
+    for (let tries = 0; tries < STAR_PLACEMENT.MAX_TRIES_PER_STAR; tries++) {
+      const candidate = pickStarCandidate(patternRng, bounds, STAR.MARGIN, pattern, starIndex);
+      if (safePoint) {
+        const dx = candidate.x - safePoint.x;
+        const dy = candidate.y - safePoint.y;
+        const minDist = Math.max(safeRadius, gravityRadius + 200);
+        if (Math.hypot(dx, dy) < minDist) {
+          continue;
+        }
+      }
+      if (safetyTargets && motion) {
+        const center = motion.center ?? candidate;
+        const radius = motion.radius ?? 0;
+        const buffer = STAR_MOTION.SAFETY_BUFFER;
+        if (safetyTargets.goal && safetyTargets.goal.minDist !== undefined) {
+          const dx = center.x - safetyTargets.goal.x;
+          const dy = center.y - safetyTargets.goal.y;
+          if (Math.hypot(dx, dy) < safetyTargets.goal.minDist + gravityRadius + radius + buffer) {
             continue;
           }
         }
-
-        let overlap = false;
-        for (const star of stars) {
-          const dx = candidate.x - star.x;
-          const dy = candidate.y - star.y;
-          const dist = Math.hypot(dx, dy);
-          if (dist < bodyRadius + star.radius) {
-            overlap = true;
-            break;
-          }
-          const minWellDist = (gravityRadius + star.gravityRadius) * 0.75;
-          if (dist < minWellDist) {
-            overlap = true;
-            break;
+        if (safetyTargets.endZone && safetyTargets.endZone.minDist !== undefined) {
+          const dx = center.x - safetyTargets.endZone.x;
+          const dy = center.y - safetyTargets.endZone.y;
+          if (Math.hypot(dx, dy) < safetyTargets.endZone.minDist + gravityRadius + radius + buffer) {
+            continue;
           }
         }
-        if (overlap) {
-          continue;
+        if (safetyTargets.beacon && safetyTargets.beacon.minDist !== undefined) {
+          const dx = center.x - safetyTargets.beacon.x;
+          const dy = center.y - safetyTargets.beacon.y;
+          if (Math.hypot(dx, dy) < safetyTargets.beacon.minDist + gravityRadius + radius + buffer) {
+            continue;
+          }
         }
-        pos = candidate;
-        break;
       }
-      if (!pos) {
+
+      let overlap = false;
+      for (const star of stars) {
+        const dx = candidate.x - star.x;
+        const dy = candidate.y - star.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < bodyRadius + star.radius) {
+          overlap = true;
+          break;
+        }
+        const minWellDist = (gravityRadius + star.gravityRadius) * 0.9;
+        if (dist < minWellDist) {
+          overlap = true;
+          break;
+        }
+      }
+      if (overlap) {
         continue;
       }
-
-      stars.push(new Star(pos.x, pos.y, {
-        mass,
-        bodyRadius,
-        gravityRadius,
-        bodyColor: type.bodyColor,
-        wellFill: type.wellFill,
-        wellStroke: type.wellStroke,
-        minimapColor: type.minimapColor,
-        spriteKey: type.spriteKey,
-        rotation: rotation,
-        rotationSpeed: rotSpeed,
-        pulsePhase,
-        pulseSpeed,
-        pulseAmount
-      }));
+      pos = candidate;
+      break;
     }
+    if (!pos) {
+      failureStreak += 1;
+      if (failureStreak >= STAR_PLACEMENT.MAX_CONSECUTIVE_FAILURES) {
+        break;
+      }
+      continue;
+    }
+
+    stars.push(new Star(pos.x, pos.y, {
+      mass,
+      bodyRadius,
+      gravityRadius,
+      bodyColor: type.bodyColor,
+      wellFill: type.wellFill,
+      wellStroke: type.wellStroke,
+      minimapColor: type.minimapColor,
+      spriteKey: type.spriteKey,
+      rotation: rotation,
+      rotationSpeed: rotSpeed,
+      pulsePhase,
+      pulseSpeed,
+      pulseAmount,
+      motion
+    }));
+    starIndex += 1;
+    failureStreak = 0;
   }
   return stars;
 }
@@ -583,6 +797,7 @@ export class SectorManager {
   normalizeSectorMeta(meta, sx, sy, ring, safePoint, safeRadius) {
     const baseSeed = this.getSectorSeed(sx, sy);
     let updated = false;
+    const fieldType = getFieldTypeForSector(this.worldSeed, sx, sy);
     const normalized = { ...meta };
     const prevType = normalized.sectorType;
     const prevMood = normalized.sectorMood;
@@ -628,6 +843,18 @@ export class SectorManager {
       normalized.surveyComplete = false;
       updated = true;
     }
+    if (!normalized.patternId) {
+      normalized.patternId = getPatternBehaviorForField(fieldType);
+      updated = true;
+    }
+    if (!Number.isFinite(normalized.patternParamsSeed)) {
+      normalized.patternParamsSeed = this.getSectorSeed(sx, sy, SEED_SALT.PATTERN);
+      updated = true;
+    }
+    if (!Number.isFinite(normalized.patternVersion)) {
+      normalized.patternVersion = PATTERN_VERSION;
+      updated = true;
+    }
     if (updated) {
       setSectorMeta(this.sectorIndex, sx, sy, normalized);
       saveSectorIndex(this.sectorIndex);
@@ -641,6 +868,7 @@ export class SectorManager {
       return this.normalizeSectorMeta(existing, sx, sy, ring, safePoint, safeRadius);
     }
 
+    const fieldType = getFieldTypeForSector(this.worldSeed, sx, sy);
     const influence = Math.max(0, this.gameState?.beacon?.exposure ?? 0);
     const cooldownReady = this.getCooldownReady();
     const typeRng = createRng(this.getSectorSeed(sx, sy, SEED_SALT.TYPE));
@@ -657,6 +885,8 @@ export class SectorManager {
     const beaconPosition = beaconPlaced
       ? pickBeaconPosition(createRng(this.getSectorSeed(sx, sy, SEED_SALT.BEACON)), this.getBounds(sx, sy), safePoint, safeRadius)
       : null;
+    const patternId = getPatternBehaviorForField(fieldType);
+    const patternParamsSeed = this.getSectorSeed(sx, sy, SEED_SALT.PATTERN);
 
     const meta = {
       sectorType,
@@ -668,7 +898,10 @@ export class SectorManager {
       surveyComplete: false,
       lastVisitedAt: null,
       anomalyModifier,
-      echoTag
+      echoTag,
+      patternId,
+      patternParamsSeed,
+      patternVersion: PATTERN_VERSION
     };
 
     setSectorMeta(this.sectorIndex, sx, sy, meta);
@@ -694,11 +927,27 @@ export class SectorManager {
   getSectorAt(sx, sy) {
     const key = `${sx},${sy}`;
     if (this.sectors.has(key)) {
-      return this.sectors.get(key);
+      const cached = this.sectors.get(key);
+      if (cached) {
+        if (!cached.fieldType) {
+          cached.fieldType = getFieldTypeForSector(this.worldSeed, sx, sy);
+        }
+        if (!cached.patternId) {
+          cached.patternId = getPatternBehaviorForField(cached.fieldType);
+        }
+        if (!Number.isFinite(cached.patternParamsSeed)) {
+          cached.patternParamsSeed = this.getSectorSeed(sx, sy, SEED_SALT.PATTERN);
+        }
+        if (!Number.isFinite(cached.patternVersion)) {
+          cached.patternVersion = PATTERN_VERSION;
+        }
+      }
+      return cached;
     }
 
     const ring = Math.max(Math.abs(sx), Math.abs(sy));
     const bounds = this.getBounds(sx, sy);
+    const fieldType = getFieldTypeForSector(this.worldSeed, sx, sy);
     const zone = getZoneConfig(ring);
     const entryOrigin = {
       x: bounds.x + bounds.size / 2,
@@ -708,14 +957,28 @@ export class SectorManager {
     const meta = this.createSectorMeta(sx, sy, ring, entryOrigin, safeRadius);
     const influence = Math.max(0, meta.generatedAtExposure ?? 0);
     const spawnProfile = buildSpawnProfile(meta.sectorType, influence);
+    const fieldMultiplier = FIELD.STAR_MULTIPLIERS[fieldType] ?? 1;
+    const patternId = meta.patternId ?? getPatternBehaviorForField(fieldType);
+    const patternParamsSeed = Number.isFinite(meta.patternParamsSeed)
+      ? meta.patternParamsSeed
+      : this.getSectorSeed(sx, sy, SEED_SALT.PATTERN);
+    const patternVersion = Number.isFinite(meta.patternVersion)
+      ? meta.patternVersion
+      : PATTERN_VERSION;
     const starRng = createRng(this.getSectorSeed(sx, sy, SEED_SALT.STARS));
     const stars = generateStars(
       starRng,
       bounds,
       ring,
-      spawnProfile.stars,
+      spawnProfile.stars * fieldMultiplier,
       ring === 0 ? entryOrigin : null,
-      ring === 0 ? safeRadius : 0
+      ring === 0 ? safeRadius : 0,
+      fieldType,
+      {
+        patternId,
+        patternParamsSeed,
+        patternVersion
+      }
     );
     const goalAnchor = meta.sectorType === SECTOR_TYPES.SIGNAL_ORIGIN && meta.beaconPosition
       ? { x: meta.beaconPosition.x, y: meta.beaconPosition.y, radius: 520 }
@@ -750,6 +1013,10 @@ export class SectorManager {
       bounds,
       zone: zone.id,
       ring,
+      fieldType,
+      patternId,
+      patternParamsSeed,
+      patternVersion,
       sectorType: meta.sectorType,
       sectorMood: meta.sectorMood,
       anomalyModifier: meta.anomalyModifier ?? null,

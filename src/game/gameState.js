@@ -21,6 +21,7 @@ function ensureArray(value) {
 export function createDefaultGameState(seed = generateSeed()) {
   return {
     worldSeed: seed,
+    worldAgeMs: 0,
     beacon: {
       exposure: 0,
       visitCount: 0,
@@ -50,6 +51,11 @@ export function normalizeGameState(raw) {
   const historyRaw = isPlainObject(raw.history) ? raw.history : {};
 
   base.worldSeed = Number.isFinite(raw.worldSeed) ? raw.worldSeed : base.worldSeed;
+  if (Number.isFinite(raw.worldAgeMs)) {
+    base.worldAgeMs = Math.max(0, Math.floor(clampNumber(raw.worldAgeMs, 0)));
+  } else if (Number.isFinite(raw.worldAgeTicks)) {
+    base.worldAgeMs = Math.max(0, Math.floor(clampNumber(raw.worldAgeTicks, 0))) * 1000;
+  }
   base.beacon.exposure = Math.max(0, clampNumber(beaconRaw.exposure, 0));
   base.beacon.visitCount = Math.max(0, Math.floor(clampNumber(beaconRaw.visitCount, 0)));
   base.beacon.totalObservedSeconds = Math.max(0, clampNumber(beaconRaw.totalObservedSeconds, 0));

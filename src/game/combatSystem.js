@@ -1,8 +1,9 @@
 import { Asteroid } from "../entities/asteroid.js";
-import { applyGravity, integrate } from "./physics.js";
+import { integrate } from "./physics.js";
+import { applyForcesToEntity } from "./forceFields.js";
 import { CONFIG } from "./config.js";
 
-const { PICKUPS, ENEMY } = CONFIG;
+const { PICKUPS, ENEMY, ASTEROID } = CONFIG;
 const FUEL_PICKUP_AMOUNT_RATIO = PICKUPS.FUEL.AMOUNT_RATIO;
 const ENEMY_HIT_RADIUS = ENEMY.HIT_RADIUS;
 const ENEMY_CHUNK_SPRITE = new Image();
@@ -29,6 +30,7 @@ const FUEL_PICKUP = {
   ROT_SPEED_MIN: PICKUPS.FUEL.ROT_SPEED_MIN,
   ROT_SPEED_MAX: PICKUPS.FUEL.ROT_SPEED_MAX
 };
+const ASTEROID_FRAGMENTS = ASTEROID.FRAGMENTS;
 
 export class Particle {
   constructor(x, y, angle, speed, life, color, size) {
@@ -202,13 +204,32 @@ export function updateEnemyBullets(
   }
 }
 
-export function updateFuelPickups(fuelPickups, activeStars, dt) {
+function findSectorForPosition(activeSectors, x, y) {
+  if (!Array.isArray(activeSectors)) {
+    return null;
+  }
+  for (const sector of activeSectors) {
+    const bounds = sector?.bounds;
+    if (!bounds) {
+      continue;
+    }
+    if (x >= bounds.x && x <= bounds.x + bounds.size
+      && y >= bounds.y && y <= bounds.y + bounds.size) {
+      return sector;
+    }
+  }
+  return null;
+}
+
+export function updateFuelPickups(fuelPickups, activeStars, activeSectors, dt) {
   if (fuelPickups.length === 0) {
     return;
   }
   for (const fuel of fuelPickups) {
     fuel.update(dt);
-    applyGravity(fuel, activeStars, dt);
+    const sector = findSectorForPosition(activeSectors, fuel.x, fuel.y);
+    const rivers = sector?.runtimeRivers ?? [];
+    applyForcesToEntity(fuel, dt, activeStars, rivers, CONFIG);
     integrate(fuel, dt);
   }
 }
@@ -240,7 +261,8 @@ export function handleBulletHits(
   addScore,
   sounds,
   fuelPickups,
-  particles
+  particles,
+  worldAgeMs
 ) {
   if (bullets.length === 0) {
     return;
@@ -283,7 +305,7 @@ export function handleBulletHits(
           spawnExplosion(particles, a.x, a.y, "normal");
           sounds.play("explosion");
           if (a.spriteKey !== "chunk") {
-            spawnAsteroidFragments(a, sector);
+            spawnAsteroidFragments(a, sector, worldAgeMs ?? 0);
           }
           sector.asteroids.splice(j, 1);
           bullets.splice(i, 1);
@@ -379,6 +401,7 @@ export function updateEnemies(
   ship,
   dt,
   activeStars,
+  activeSectors,
   minimapRange,
   enemyFireRange,
   enemyFireCooldown,
@@ -397,7 +420,9 @@ export function updateEnemies(
       inRange.push(enemy);
     }
     enemy.update(dt, ship.x, ship.y, true);
-    applyGravity(enemy, activeStars, dt);
+    const sector = findSectorForPosition(activeSectors, enemy.x, enemy.y);
+    const rivers = sector?.runtimeRivers ?? [];
+    applyForcesToEntity(enemy, dt, activeStars, rivers, CONFIG);
     integrate(enemy, dt);
     if (enemy.canFire() && dist <= enemyFireRange) {
       sounds.play("enemy_laser");
@@ -428,8 +453,14 @@ export function getEnemySpawnCountForSector(currentSector) {
   return Math.max(0, Math.round(base * hazard));
 }
 
-function spawnAsteroidFragments(asteroid, sector) {
-  const fragmentCount = 2 + Math.floor(Math.random() * 4);
+function spawnAsteroidFragments(asteroid, sector, spawnTimeMs) {
+  const fragmentCap = ASTEROID_FRAGMENTS.MAX_PER_SECTOR;
+  const existingChunks = sector.asteroids.filter((chunk) => chunk.spriteKey === "chunk").length;
+  const available = Math.max(0, fragmentCap - existingChunks);
+  if (available <= 0) {
+    return;
+  }
+  const fragmentCount = Math.min(available, 2 + Math.floor(Math.random() * 4));
   const baseSpeed = Math.hypot(asteroid.vx, asteroid.vy);
   for (let i = 0; i < fragmentCount; i++) {
     const angle = Math.random() * Math.PI * 2;
@@ -437,9 +468,10 @@ function spawnAsteroidFragments(asteroid, sector) {
     const vx = Math.cos(angle) * speed;
     const vy = Math.sin(angle) * speed;
     const fragmentRadius = Math.max(4, asteroid.radius * (0.25 + Math.random() * 0.3));
-    sector.asteroids.push(
-      new Asteroid(asteroid.x, asteroid.y, vx, vy, fragmentRadius, 0, null, "chunk")
-    );
+    const chunk = new Asteroid(asteroid.x, asteroid.y, vx, vy, fragmentRadius, 0, null, "chunk");
+    chunk.spawnTimeMs = spawnTimeMs;
+    chunk.ttlMs = ASTEROID_FRAGMENTS.TTL_MS;
+    sector.asteroids.push(chunk);
   }
 }
 

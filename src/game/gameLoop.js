@@ -3,11 +3,14 @@ import { EnemyShip } from "../entities/enemyShip.js";
 import { BeaconRelic } from "../entities/beaconRelic.js";
 import { Camera } from "./camera.js";
 import { SectorManager, SECTOR_SIZE, SECTOR_TYPES } from "./sectorManager.js";
-import { applyGravity, integrate } from "./physics.js";
+import { computeStarAccelAt, integrate } from "./physics.js";
+import { applyForcesToEntity } from "./forceFields.js";
 import { sounds, music } from "./audio.js";
 import { getSectorMeta, saveSectorIndex, setSectorMeta } from "./sectorIndex.js";
 import { saveGameState } from "./gameState.js";
 import { showShipDestroyedModal } from "../ui/shipDestroyedModal.js";
+import { drawRivers } from "./riverRender.js";
+import { getRiversForSector } from "./riverNetwork.js";
 import {
   ALERT,
   HUD_COLORS,
@@ -68,7 +71,8 @@ const {
   ENEMY,
   SHIP,
   STORAGE,
-  SECTOR
+  SECTOR,
+  RIVER
 } = CONFIG;
 
 const { ZOOM, SHAKE } = CAMERA;
@@ -734,7 +738,10 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     return true;
   }
 
-  function buildGate(type, center, axis, normal, width, poleRadius) {
+  function buildGate(type, center, travelDir, width, poleRadius) {
+    const mag = Math.hypot(travelDir.x, travelDir.y) || 1;
+    const normal = { x: travelDir.x / mag, y: travelDir.y / mag };
+    const axis = { x: -normal.y, y: normal.x };
     return {
       type,
       center,
@@ -752,7 +759,8 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     };
   }
 
-  function createSingleGate(viewRadius, type, bounds, dir, axis, margin) {
+  function createSingleGate(viewRadius, type, bounds, dir, margin) {
+    const axis = { x: -dir.y, y: dir.x };
     const apertureWidth = getGateWidth(type);
     const poleRadius = apertureWidth * CALIBRATION_GATE.POLE_RATIO;
     const halfSpan = apertureWidth / 2 + poleRadius;
@@ -776,12 +784,12 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
         continue;
       }
 
-      return buildGate(type, candidate, axis, dir, apertureWidth, poleRadius);
+      return buildGate(type, candidate, dir, apertureWidth, poleRadius);
     }
     return null;
   }
 
-  function createChainGateSeries(viewRadius, bounds, dir, axis, margin) {
+  function createChainGateSeries(viewRadius, bounds, dir, margin) {
     const type = CALIBRATION_GATE.TYPES.CHAIN;
     const apertureWidth = getGateWidth(type);
     const poleRadius = apertureWidth * CALIBRATION_GATE.POLE_RATIO;
@@ -806,6 +814,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
 
       for (let i = 0; i < chainCount; i++) {
         const arcDir = rotateVector(dir, (start + step * i) * turnDir);
+        const pathDir = rotateVector(arcDir, turnDir * (Math.PI / 2));
         const candidate = {
           x: ship.x + arcDir.x * radius,
           y: ship.y + arcDir.y * radius
@@ -818,7 +827,10 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
           valid = false;
           break;
         }
-        gates.push(buildGate(type, candidate, axis, dir, apertureWidth, poleRadius));
+        const gate = buildGate(type, candidate, pathDir, apertureWidth, poleRadius);
+        gate.chainIndex = i;
+        gate.chainCount = chainCount;
+        gates.push(gate);
       }
 
       if (valid) {
@@ -837,15 +849,14 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     }
     const bounds = sector.bounds;
     const dir = getTravelDirection();
-    const axis = { x: -dir.y, y: dir.x };
     const margin = 260;
     const type = pickGateType();
 
     if (type === CALIBRATION_GATE.TYPES.CHAIN) {
-      return createChainGateSeries(viewRadius, bounds, dir, axis, margin);
+      return createChainGateSeries(viewRadius, bounds, dir, margin);
     }
 
-    const single = createSingleGate(viewRadius, type, bounds, dir, axis, margin);
+    const single = createSingleGate(viewRadius, type, bounds, dir, margin);
     return single ? [single] : null;
   }
 
@@ -1002,10 +1013,21 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       };
       const poleRadius = gate.poleRadius * (gate.type === CALIBRATION_GATE.TYPES.DISPLACEMENT ? 1.15 : 1);
       const color = gate.color;
+      let gateAlpha = fade;
+      if (gate.type === CALIBRATION_GATE.TYPES.CHAIN) {
+        const total = Math.max(1, gate.chainCount ?? 1);
+        const progress = Math.max(0, chainProgress ?? 0);
+        if (Number.isFinite(gate.chainIndex) && gate.chainIndex >= progress) {
+          const remaining = Math.max(1, total - progress);
+          const offset = gate.chainIndex - progress;
+          const t = remaining > 1 ? offset / (remaining - 1) : 0;
+          gateAlpha *= 1 - t * CALIBRATION_GATE.CHAIN_HUE_FALLOFF;
+        }
+      }
 
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
-      ctx.globalAlpha = fade;
+      ctx.globalAlpha = gateAlpha;
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
       ctx.lineWidth = gate.thickness;
@@ -1102,6 +1124,32 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     stateDirty = false;
   }
 
+  function updateSectorRivers(targetSector, shipPos = null) {
+    if (!targetSector) {
+      return;
+    }
+    const worldAgeMs = gameState?.worldAgeMs ?? 0;
+    const worldAgeTicks = Math.floor(worldAgeMs / 1000);
+    if (RIVER.DISABLED_SECTOR_TYPES?.includes(targetSector.sectorType)) {
+      targetSector.runtimeRivers = [];
+      targetSector.riversTick = worldAgeTicks;
+      return;
+    }
+    if (targetSector.riversTick === worldAgeTicks && Array.isArray(targetSector.runtimeRivers)) {
+      return;
+    }
+    targetSector.runtimeRivers = getRiversForSector(
+      sectorManager.worldSeed,
+      worldAgeTicks,
+      targetSector.sx,
+      targetSector.sy,
+      targetSector.bounds,
+      targetSector.fieldType,
+      shipPos
+    );
+    targetSector.riversTick = worldAgeTicks;
+  }
+
   function pauseForLifeLoss(outcome) {
     if (deathPauseActive) {
       return;
@@ -1171,7 +1219,10 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       surveyComplete: false,
       lastVisitedAt: null,
       anomalyModifier: sector.anomalyModifier ?? null,
-      echoTag: sector.echoTag ?? null
+      echoTag: sector.echoTag ?? null,
+      patternId: sector.patternId ?? null,
+      patternParamsSeed: Number.isFinite(sector.patternParamsSeed) ? sector.patternParamsSeed : null,
+      patternVersion: Number.isFinite(sector.patternVersion) ? sector.patternVersion : null
     };
     setSectorMeta(sectorIndex, sector.sx, sector.sy, fallback);
     saveSectorIndex(sectorIndex);
@@ -1587,6 +1638,14 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     if (controlsDisabledTimer > 0) {
       controlsDisabledTimer = Math.max(0, controlsDisabledTimer - dt);
     }
+    const simulationIsRunning = !deathPauseActive && !pendingGameOver && respawnTimer <= 0;
+    if (simulationIsRunning && gameState) {
+      const dtMs = Math.max(0, Math.round(dt * 1000));
+      if (dtMs > 0) {
+        gameState.worldAgeMs = (gameState.worldAgeMs ?? 0) + dtMs;
+        markStateDirty();
+      }
+    }
     if (deathPauseActive) {
       saveStateIfNeeded();
       return;
@@ -1674,6 +1733,10 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
 
     sector = sectorManager.getSectorForPosition(ship.x, ship.y);
     activeSectors = sectorManager.getSectorsAround(ship.x, ship.y, ACTIVE_SECTOR_RANGE);
+    for (const activeSector of activeSectors) {
+      const shipPos = activeSector === sector ? { x: ship.x, y: ship.y } : null;
+      updateSectorRivers(activeSector, shipPos);
+    }
 
     const viewRadius = getViewRadius(canvas, camera);
     if (activeGates.length === 0) {
@@ -1772,11 +1835,9 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     wasInBeaconZone = inBeaconZone;
     wasInActiveMotif = isActiveMotif(beaconSignal.motif);
 
-    // --- gravity debug accumulation ---
-    ship.debugGravityX = 0;
-    ship.debugGravityY = 0;
-
     const activeStars = activeSectors.flatMap((s) => s.stars);
+    const worldAgeMs = gameState?.worldAgeMs ?? 0;
+    const worldAgeSeconds = worldAgeMs / 1000;
     for (const activeSector of activeSectors) {
       if (activeSector.beacon && !activeSector.beaconEntity) {
         activeSector.beaconEntity = new BeaconRelic(activeSector.beacon.x, activeSector.beacon.y, {
@@ -1796,14 +1857,19 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     }
     for (const star of activeStars) {
       if (typeof star.update === "function") {
-        star.update(dt);
+        star.update(dt, worldAgeSeconds);
       }
     }
-    applyGravity(ship, activeStars, dt, (gx, gy) => {
-    ship.debugGravityX += gx;
-    ship.debugGravityY += gy;
-    });
+    if (DEBUG.VECTORS) {
+      const accel = computeStarAccelAt(ship, activeStars, CONFIG);
+      ship.debugGravityX = accel.ax;
+      ship.debugGravityY = accel.ay;
+    } else {
+      ship.debugGravityX = 0;
+      ship.debugGravityY = 0;
+    }
 
+    applyForcesToEntity(ship, dt, activeStars, sector?.runtimeRivers ?? [], CONFIG);
     integrate(ship, dt);
     updateGate(dt);
     const shipSpeed = Math.hypot(ship.vx, ship.vy);
@@ -1814,20 +1880,28 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     lastShipX = ship.x;
     lastShipY = ship.y;
     for (const activeSector of activeSectors) {
-      for (const asteroid of activeSector.asteroids) {
+      for (let i = activeSector.asteroids.length - 1; i >= 0; i--) {
+        const asteroid = activeSector.asteroids[i];
+        if (asteroid.ttlMs !== undefined && asteroid.spawnTimeMs !== undefined) {
+          if (worldAgeMs - asteroid.spawnTimeMs >= asteroid.ttlMs) {
+            activeSector.asteroids.splice(i, 1);
+            continue;
+          }
+        }
         if (typeof asteroid.update === "function") {
           asteroid.update(dt);
         }
-        applyGravity(asteroid, activeStars, dt);
+        applyForcesToEntity(asteroid, dt, activeStars, activeSector.runtimeRivers ?? [], CONFIG);
         integrate(asteroid, dt);
       }
     }
-    updateFuelPickups(fuelPickups, activeStars, dt);
+    updateFuelPickups(fuelPickups, activeStars, activeSectors, dt);
     enemiesInRange = updateEnemies(
       enemies,
       ship,
       dt,
       activeStars,
+      activeSectors,
       MINIMAP.RANGE,
       ENEMY_FIRE_RANGE,
       ENEMY.FIRE_COOLDOWN,
@@ -1846,7 +1920,8 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       addScore,
       sounds,
       fuelPickups,
-      particles
+      particles,
+      worldAgeMs
     );
     updateZoom(dt);
     if (lastTrailX === null) {
@@ -2038,6 +2113,19 @@ function render() {
 
   // World (rotated)
   camera.applyTransform(ctx, canvas);
+  const maxViewWidth = canvas.width / ZOOM.MIN;
+  const maxViewHeight = canvas.height / ZOOM.MIN;
+  const worldAgeMs = gameState?.worldAgeMs ?? 0;
+  const worldAgeTicks = Math.floor(worldAgeMs / 1000);
+  const maxViewRect = {
+    x: ship.x - maxViewWidth / 2,
+    y: ship.y - maxViewHeight / 2,
+    width: maxViewWidth,
+    height: maxViewHeight
+  };
+  const rivers = activeSectors.flatMap((activeSector) => activeSector.runtimeRivers ?? []);
+  const renderStars = activeSectors.flatMap((activeSector) => activeSector.stars);
+  drawRivers(ctx, rivers, maxViewRect, worldAgeTicks, renderStars, worldAgeMs / 1000);
   const shipSpeed = Math.hypot(ship.vx, ship.vy);
   drawTrail(ctx, trail, shipSpeed);
   drawSectorBounds(ctx, sector);

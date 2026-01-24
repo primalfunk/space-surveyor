@@ -70,6 +70,7 @@ const SCORE = {
 // Beacon exposure system.
 const BEACON = {
   OBSERVER_RADIUS: 900,
+  MIN_STAR_DIST: 300,
   OBSERVE_RATE: 0.00002,
   RETURN_BONUS: 0.02,
   SURVEY_BONUS: 0.05,
@@ -83,10 +84,10 @@ const CALIBRATION = {
   // Ship radius reference for gate sizing, not the collision radius.
   SHIP_RADIUS: 24,
   GATE: {
-    SPAWN_MIN: 5,
-    SPAWN_MAX: 10,
-    FADE_TIME: 0.5,
-    LIFETIME: 30,
+    SPAWN_MIN: 2,
+    SPAWN_MAX: 7,
+    FADE_TIME: 1.5,
+    LIFETIME: 40,
     EXCLUSION_RADIUS: 220,
     CRUISE_MIN: 180,
     CRUISE_MAX: 260,
@@ -100,13 +101,14 @@ const CALIBRATION = {
     CHAIN_MAX: 9,
     CHAIN_ARC_MIN: Math.PI / 10,
     CHAIN_ARC_MAX: Math.PI / 5,
+    CHAIN_HUE_FALLOFF: 0.6,
     GATE_SCORE_BASE: 10,
     CHAIN_SCORE_BASE: 10,
     CHAIN_ATTEMPTS: 6,
     WEIGHTS: {
-      CHAIN_GATE: 0.4,
-      EXIT_ALIGNMENT_GATE: 0.3,
-      DISPLACEMENT_GATE: 0.2,
+      CHAIN_GATE: 0.5,
+      EXIT_ALIGNMENT_GATE: 0.25,
+      DISPLACEMENT_GATE: 0.15,
       SHUTDOWN_GATE: 0.1
     },
     TYPES: {
@@ -364,7 +366,7 @@ const SHIP = {
 const ENEMY = {
   ROT_SPEED: 2.5,
   THRUST: 120,
-  MAX_SPEED: 220,
+  MAX_SPEED: 180,
   STRAFE_RANGE: 520,
   STRAFE_BUFFER: 90,
   DRAW_SIZE: 36,
@@ -429,6 +431,7 @@ const END_ZONE = {
   HEIGHT: 16,
   MARGIN: 120,
   MIN_GOAL_DIST: 600,
+  MIN_STAR_DIST: 300,
   ROT_SPEED: 2.2,
   PULSE_SPEED: 3.2,
   PULSE_AMOUNT: 0.08
@@ -440,6 +443,10 @@ const ASTEROID = {
   CHUNK_SPRITE_SRC: "assets/ui/sprites/asteroid_chunk.png",
   ROT_SPEED_MIN: 0.05,
   ROT_SPEED_MAX: 0.18,
+  FRAGMENTS: {
+    TTL_MS: 10000,
+    MAX_PER_SECTOR: 60
+  },
   GENERATION: {
     COUNT: 12,
     SPEED_MIN: 5,
@@ -535,7 +542,98 @@ const STAR = {
         massMultiplier: 4.0
       }
     },
-    RATE_MULTIPLIER: 3
+    RATE_MULTIPLIER: 3,
+    PLACEMENT: {
+      MAX_TRIES_PER_STAR: 18,
+      MAX_CONSECUTIVE_FAILURES: 6
+    }
+  },
+  MOTION: {
+    SAFETY_BUFFER: 120
+  }
+};
+
+// Field composition that shapes spatial layouts across many sectors.
+const FIELD = {
+  SIZE_SECTORS: 8,
+  TYPES: {
+    GEOMETRIC_LATTICE: "GEOMETRIC_LATTICE",
+    GEOMETRIC_RADIAL: "GEOMETRIC_RADIAL",
+    BRAIDED_FLOW: "BRAIDED_FLOW",
+    SPARSE_VOID: "SPARSE_VOID",
+    CHAOTIC_CLUSTER: "CHAOTIC_CLUSTER"
+  },
+  STAR_MULTIPLIERS: {
+    GEOMETRIC_LATTICE: 1.0,
+    GEOMETRIC_RADIAL: 0.95,
+    BRAIDED_FLOW: 0.9,
+    SPARSE_VOID: 0.2,
+    CHAOTIC_CLUSTER: 1.1
+  },
+  VOID_ALLOWED_MAX_RING: 6,
+  VOID_ZERO_STAR_PROB: 0.55
+};
+
+// Space river network and force tuning.
+const RIVER = {
+  WIDTH_MIN: 120,
+  WIDTH_MAX: 900,
+  STRENGTH_BASE: 23.3,
+  STRENGTH_MULTIPLIER: 3,
+  STRENGTH_EXPONENT: 1.0,
+  EDGE_FALLOFF_POWER: 2.0,
+  TIME_SCALE: 1.0,
+  VS_STAR_RATIO_MAX: 0.6,
+  WORLD_DENSITY: 0.22,
+  MIN_PER_SECTOR: 2,
+  PER_SECTOR_MAX: 2,
+  CHANNEL_SECTOR_BIAS: 0.65,
+  DISABLED_SECTOR_TYPES: ["SIGNAL_ORIGIN"],
+  POLYLINE_SPACING: 120,
+  BACKBONE_SPAN_CELLS: 3,
+  DRIFT_AMPLITUDE: 3.6,
+  DRIFT_RATE: 0.03,
+  ANCHOR: {
+    CELL_SIZE_SECTORS: 12,
+    SEARCH_RADIUS: 2.5,
+    SNAP_RADIUS: 350
+  },
+  RENDER: {
+    SHIMMER_RATE: 0.006,
+    WAVE_AMPLITUDE: 18,
+    WAVE_LENGTH: 420,
+    WAVE_SPEED: 0.25,
+    PULSE_RATE: 0.35,
+    PULSE_AMOUNT: 0.2,
+    BASE_COLOR_VARIANCE: 16,
+    CHROMA_SPLIT: {
+      OFFSETS: [-0.06, 0.06, 0.1],
+      ALPHA: 0.06,
+      WIDTH_SCALE: 0.16,
+      COLORS: [
+        [90, 210, 255],
+        [255, 150, 220],
+        [140, 255, 210]
+      ]
+    },
+    FLOW_DASH: {
+      LENGTH: 140,
+      GAP: 220,
+      WIDTH: 2.5,
+      ALPHA: 0.14,
+      SPEED: 0.6,
+      COLOR: [210, 240, 255]
+    },
+    SCINTILLATION: {
+      ENABLED: true,
+      RATE: 0.18,
+      WAVELENGTH: 220,
+      STRENGTH: 0.28,
+      HUE_SHIFT: 0.18
+    },
+    OUTER_ALPHA: 0.06,
+    MID_ALPHA: 0.1,
+    CORE_ALPHA: 0.14
   }
 };
 
@@ -573,7 +671,11 @@ const SECTOR = {
     STARS: 606,
     GOAL: 707,
     END_ZONE: 808,
-    ASTEROIDS: 909
+    ASTEROIDS: 909,
+    PATTERN: 955,
+    FIELD: 1001,
+    RIVER: 1111,
+    ANCHOR: 1222
   },
   ZONES: {
     start: { id: "start", asteroidMultiplier: 0.5 },
@@ -625,16 +727,16 @@ SECTOR.SPAWN_PROFILES = {
 const AUDIO = {
   SOUNDS: {
     start_game: { src: "assets/sounds/mp3/start_game.mp3", volume: 0.9 },
-    laser: { src: "assets/sounds/mp3/laser.mp3", volume: 0.13125 },
-    enemy_laser: { src: "assets/sounds/mp3/laser.mp3", volume: 0.09375 },
-    explosion: { src: "assets/sounds/mp3/explosion.mp3", volume: 0.85 },
+    laser: { src: "assets/sounds/mp3/laser.mp3", volume: 0.13 },
+    enemy_laser: { src: "assets/sounds/mp3/laser.mp3", volume: 0.09 },
+    explosion: { src: "assets/sounds/mp3/explosion.mp3", volume: 0.75 },
     lost_life: { src: "assets/sounds/mp3/lost_life.mp3", volume: 0.9 },
     got_fuel: { src: "assets/sounds/mp3/got_fuel.mp3", volume: 0.8 },
     got_gate: { src: "assets/sounds/mp3/got_gate.mp3", volume: 1 },
-    got_survey: { src: "assets/sounds/mp3/got_survey.mp3", volume: 0.85 },
-    game_over: { src: "assets/sounds/mp3/game_over.mp3", volume: 0.9 },
-    thrust: { src: "assets/sounds/mp3/thrust.mp3", volume: 0.7 },
-    thrust_rotate: { src: "assets/sounds/mp3/thrust.mp3", volume: 0.2 }
+    got_survey: { src: "assets/sounds/mp3/got_survey.mp3", volume: 0.7 },
+    game_over: { src: "assets/sounds/mp3/game_over.mp3", volume: 0.6 },
+    thrust: { src: "assets/sounds/mp3/thrust.mp3", volume: 0.4 },
+    thrust_rotate: { src: "assets/sounds/mp3/thrust.mp3", volume: 0 }
   },
   MUSIC: {
     TRACKS: [
@@ -672,6 +774,8 @@ export const CONFIG = {
   END_ZONE,
   ASTEROID,
   STAR,
+  FIELD,
+  RIVER,
   SECTOR,
   AUDIO
 };

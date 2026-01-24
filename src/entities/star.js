@@ -17,6 +17,9 @@ export class Star {
     const opts = typeof options === "number" ? { mass: options } : options;
     this.x = x;
     this.y = y;
+    this.baseX = x;
+    this.baseY = y;
+    this.motion = opts.motion ?? null;
     this.mass = opts.mass ?? DEFAULTS.MASS;
     this.radius = opts.bodyRadius ?? DEFAULTS.BODY_RADIUS;
     this.bodyColor = opts.bodyColor ?? DEFAULTS.BODY_COLOR;
@@ -33,10 +36,22 @@ export class Star {
     this.pulseScale = 1;
   }
 
-  update(dt) {
+  update(dt, timeSeconds = null) {
     this.rotation += this.rotationSpeed * dt;
     this.pulsePhase += this.pulseSpeed * dt;
     this.pulseScale = 1 + Math.sin(this.pulsePhase) * this.pulseAmount;
+    if (this.motion && Number.isFinite(timeSeconds)) {
+      if (this.motion.type === "orbit") {
+        const angle = (this.motion.phase ?? 0) + timeSeconds * (this.motion.angularSpeed ?? 0);
+        const radius = this.motion.radius ?? 0;
+        const center = this.motion.center ?? { x: this.baseX, y: this.baseY };
+        this.x = center.x + Math.cos(angle) * radius;
+        this.y = center.y + Math.sin(angle) * radius;
+      }
+    } else {
+      this.x = this.baseX;
+      this.y = this.baseY;
+    }
   }
 
   draw(ctx) {

@@ -24,11 +24,8 @@ export function showStartScreen(root, onStart, onReset) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "start-button start-capsule";
-  button.textContent = "Press Space to Continue";
+  button.textContent = "Press Space to Start";
 
-  const resetHint = document.createElement("div");
-  resetHint.className = "start-reset-hint";
-  resetHint.textContent = "Hold Shift + Space to Reset World";
 
   const blurb = document.createElement("div");
   blurb.className = "start-blurb";
@@ -230,7 +227,6 @@ export function showStartScreen(root, onStart, onReset) {
   panel.appendChild(subtitle);
   panel.appendChild(carousel);
   panel.appendChild(button);
-  panel.appendChild(resetHint);
   panel.appendChild(blurb);
   overlay.appendChild(panel);
   root.appendChild(overlay);
@@ -241,17 +237,20 @@ export function showStartScreen(root, onStart, onReset) {
 
   const credit = document.createElement("div");
   credit.className = "start-credit";
-  credit.innerHTML = 'a game by <span class="start-subtitle-name">Jared Menard</span> &middot; All Rights Reserved';
+  credit.innerHTML = 'a game by <span class="start-subtitle-name">wingtipstudio.com</span> &middot; All Rights Reserved';
   overlay.appendChild(credit);
 
   const bgObjects = createBackgroundObjects(bgLayer, 6, 4);
 
   let started = false;
-  const start = () => {
+  const start = (shouldReset = false) => {
     if (started) {
       return;
     }
     started = true;
+    if (shouldReset && onReset) {
+      onReset();
+    }
     sounds.play("start_game");
     cleanup();
     if (onStart) {
@@ -262,14 +261,11 @@ export function showStartScreen(root, onStart, onReset) {
   const onKeyDown = (event) => {
     if (event.code === "Space") {
       event.preventDefault();
-      if (event.shiftKey && onReset) {
-        onReset();
-      }
-      start();
+      start(true);
     }
   };
 
-  button.addEventListener("click", start);
+  button.addEventListener("click", () => start(true));
   window.addEventListener("keydown", onKeyDown);
 
   function cleanup() {

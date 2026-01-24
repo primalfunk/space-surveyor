@@ -28,6 +28,28 @@ export function applyGravity(entity, stars, dt, debugCb = null) {
   }
 }
 
+export function computeStarAccelAt(pos, stars, config = null) {
+  const gravityG = config?.PHYSICS?.GRAVITY_G ?? GRAVITY_G;
+  const softening = config?.PHYSICS?.SOFTENING ?? SOFTENING;
+  let ax = 0;
+  let ay = 0;
+  for (const star of stars) {
+    const dx = star.x - pos.x;
+    const dy = star.y - pos.y;
+    const r = Math.hypot(dx, dy);
+    if (Number.isFinite(star.gravityRadius) && r > star.gravityRadius) {
+      continue;
+    }
+
+    const r2 = dx * dx + dy * dy + softening * softening;
+    const rSoft = Math.sqrt(r2);
+    const force = (gravityG * star.mass) / r2;
+    ax += (dx / rSoft) * force;
+    ay += (dy / rSoft) * force;
+  }
+  return { ax, ay };
+}
+
 export function integrate(entity, dt) {
   entity.x += entity.vx * dt;
   entity.y += entity.vy * dt;
