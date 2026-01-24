@@ -1,9 +1,12 @@
+import { CONFIG } from "../game/config.js";
+
+const { ASTEROID } = CONFIG;
 const ASTEROID_SPRITE = new Image();
-ASTEROID_SPRITE.src = "assets/ui/sprites/asteroid.png";
+ASTEROID_SPRITE.src = ASTEROID.SPRITE_SRC;
 const ASTEROID_CHUNK_SPRITE = new Image();
-ASTEROID_CHUNK_SPRITE.src = "assets/ui/sprites/asteroid_chunk.png";
-const ASTEROID_ROT_SPEED_MIN = 0.05;
-const ASTEROID_ROT_SPEED_MAX = 0.18;
+ASTEROID_CHUNK_SPRITE.src = ASTEROID.CHUNK_SPRITE_SRC;
+const ASTEROID_ROT_SPEED_MIN = ASTEROID.ROT_SPEED_MIN;
+const ASTEROID_ROT_SPEED_MAX = ASTEROID.ROT_SPEED_MAX;
 
 export class Asteroid {
   constructor(x, y, vx, vy, radius = 16, rotation = 0, rotationSpeed = null, spriteKey = "asteroid") {

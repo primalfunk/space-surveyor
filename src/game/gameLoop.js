@@ -1,349 +1,103 @@
 import { Ship } from "../entities/ship.js";
-import { Asteroid } from "../entities/asteroid.js";
 import { EnemyShip } from "../entities/enemyShip.js";
+import { BeaconRelic } from "../entities/beaconRelic.js";
 import { Camera } from "./camera.js";
-import { SectorManager, SECTOR_SIZE } from "./sectorManager.js";
+import { SectorManager, SECTOR_SIZE, SECTOR_TYPES } from "./sectorManager.js";
 import { applyGravity, integrate } from "./physics.js";
 import { sounds, music } from "./audio.js";
+import { getSectorMeta, saveSectorIndex, setSectorMeta } from "./sectorIndex.js";
+import { saveGameState } from "./gameState.js";
+import { showShipDestroyedModal } from "../ui/shipDestroyedModal.js";
+import {
+  ALERT,
+  HUD_COLORS,
+  HUD_FONT,
+  MINIMAP,
+  drawAlerts,
+  drawBeaconSignalHud,
+  drawBearingIndicators,
+  drawFuelGauge,
+  drawMiniMap,
+  drawScanPulse,
+  drawScoreHud,
+  drawStatusHud
+} from "./hud.js";
+import {
+  CONTROL_DISABLE,
+  SCORE_POPUP,
+  SCORE_POPUP_COLORS,
+  TRAIL_COLOR,
+  drawBackgroundEvents,
+  drawControlDisableOverlay,
+  drawParticles,
+  drawScorePopups,
+  drawScreenEffects,
+  drawTrail
+} from "./visualEffects.js";
+import {
+  Particle,
+  drawBullets,
+  drawEnemies,
+  drawEnemyBullets,
+  drawFuelPickups,
+  getEnemySpawnCountForSector,
+  handleBulletHits,
+  handleFuelPickups,
+  spawnBullet,
+  spawnExplosion,
+  updateBullets,
+  updateEnemies,
+  updateEnemyBullets,
+  updateEnemyPings,
+  updateFuelPickups,
+  updateParticles
+} from "./combatSystem.js";
+import { CONFIG } from "./config.js";
 
-const DEBUG = {
-  VECTORS: true
-};
+const {
+  DEBUG,
+  CAMERA,
+  GAMEPLAY,
+  SCORE,
+  BEACON,
+  CALIBRATION,
+  BACKGROUND,
+  EFFECTS,
+  INPUT,
+  BULLET,
+  ENEMY,
+  SHIP,
+  STORAGE,
+  SECTOR
+} = CONFIG;
 
-const ZOOM = {
-  MIN: 0.4,
-  MAX: 2.0,
-  SPEED: 0.7,
-  WHEEL_STEP: 0.12
-};
-
-const MINIMAP = {
-  SIZE: 200,
-  RANGE: 3000  // world units visible from ship
-};
-
-const COMPASS = {
-  WIDTH: 320,
-  HEIGHT: 78,
-  Y_OFFSET: 55,
-  FOV: Math.PI,
-  TICK_DEG: 15
-};
-
-const BEARING = {
-  RADIUS: 36,
-  CHEVRON_LENGTH: 9,
-  CHEVRON_WIDTH: 5,
-  CHEVRON_GAP: 7,
-  DRIFT_AMPLITUDE: 4,
-  DRIFT_SPEED: 0.0035,
-  PULSE_SPEED: 0.0045,
-  FUEL_SIZE: 3,
-  SCAN_PRIMARY_ALPHA: 0.8,
-  SCAN_SECONDARY_ALPHA: 0.45,
-  FUEL_ALPHA: 0.3,
-  DANGER_ALPHA: 0.85,
-  DANGER_PULSE_SPEED: 0.012,
-  DANGER_FLICKER_SPEED: 0.045,
-  DANGER_DRIFT_SPEED: 0.006,
-  FUEL_MAX_DOTS: 3
-};
-const SCAN_PULSE = {
-  PERIOD: 2400,
-  RADIUS_MIN: 16,
-  RADIUS_MAX: 160,
-  LINE_WIDTH: 2
-};
-
-const ACTIVE_SECTOR_RANGE = 1;
-
-const START_SAFE_RADIUS = 1600;
-const FUEL_PICKUP_AMOUNT_RATIO = 1.0;
-const STARTING_LIVES = 3;
-const INVULN_DURATION = 1.25;
-const GAME_OVER_DELAY = 0.7;
-const RESPAWN_DELAY = 0.6;
-const SCORE_CHUNK_MULTIPLIER = 0.5;
-const SCORE_POINTS = {
-  ASTEROID: 5,
-  ENEMY: 25,
-  FUEL: 15,
-  SURVEY: 40
-};
-
-const STARFIELD = {
-  DENSITY: 0.002,
-  ALPHA: 0.45,
-  BRIGHTNESS_MIN: 180,
-  BRIGHTNESS_MAX: 255
-};
-const DUSTFIELD = {
-  DENSITY: 0.0012,
-  ALPHA: 0.22,
-  BRIGHTNESS_MIN: 80,
-  BRIGHTNESS_MAX: 160
-};
-const FARFIELD = {
-  DENSITY: 0.0007,
-  ALPHA: 0.18,
-  BRIGHTNESS_MIN: 110,
-  BRIGHTNESS_MAX: 190
-};
-const BULLET = {
-  SPEED: 900,
-  LIFE: 1.2,
-  COOLDOWN: 0.18
-};
-const ENEMY = {
-  FIRE_COOLDOWN: BULLET.COOLDOWN * 3,
-  SPAWN_MARGIN: 120
-};
+const { ZOOM, SHAKE } = CAMERA;
+const {
+  ACTIVE_SECTOR_RANGE,
+  STARTING_LIVES,
+  INVULN_DURATION,
+  GAME_OVER_DELAY,
+  RESPAWN_DELAY
+} = GAMEPLAY;
+const { CHUNK_MULTIPLIER: SCORE_CHUNK_MULTIPLIER, POINTS: SCORE_POINTS } = SCORE;
+const { SHIP_RADIUS: CALIBRATION_SHIP_RADIUS, GATE: CALIBRATION_GATE } = CALIBRATION;
+const {
+  STARFIELD,
+  DUSTFIELD,
+  FARFIELD,
+  SLICE: BACKGROUND_SLICE,
+  EVENTS: BACKGROUND_EVENTS,
+  PALETTE: PSYCHE_PALETTE,
+  NEBULA
+} = BACKGROUND;
+const { THRUST_PARTICLES, TRAIL_SPARKS } = EFFECTS;
+const { TOUCH } = INPUT;
+const START_SAFE_RADIUS = SECTOR.START_SAFE_RADIUS;
 const PLAYER_EFFECTIVE_RANGE = BULLET.SPEED * BULLET.LIFE;
-const ENEMY_RANGE_SCALE = 2 / 3;
+const ENEMY_RANGE_SCALE = ENEMY.RANGE_SCALE;
 const ENEMY_EFFECTIVE_RANGE = PLAYER_EFFECTIVE_RANGE * ENEMY_RANGE_SCALE;
 const ENEMY_FIRE_RANGE = ENEMY_EFFECTIVE_RANGE * 1.1;
 const ENEMY_BULLET_LIFE = BULLET.LIFE * ENEMY_RANGE_SCALE;
-const ENEMY_HIT_RADIUS = 12;
-const ENEMY_CHUNK_SPRITE = new Image();
-ENEMY_CHUNK_SPRITE.src = "assets/ui/sprites/enemy_chunk.png";
-const ENEMY_CHUNK = {
-  COUNT_MIN: 5,
-  COUNT_MAX: 9,
-  SPEED_MIN: 90,
-  SPEED_MAX: 240,
-  SIZE_MIN: 8,
-  SIZE_MAX: 16,
-  LIFE_MIN: 0.5,
-  LIFE_MAX: 1.2,
-  ROT_SPEED_MIN: 2.0,
-  ROT_SPEED_MAX: 5.0
-};
-const FUEL_SPRITE = new Image();
-FUEL_SPRITE.src = "assets/ui/sprites/fuel.png";
-const FUEL_PICKUP = {
-  WIDTH: 12,
-  HEIGHT: 24,
-  RADIUS: 14,
-  DROP_CHANCE: 1 / 3,
-  ROT_SPEED_MIN: 0.5,
-  ROT_SPEED_MAX: 1.1
-};
-
-const HUD_FONT = "'Orbitron', 'Bank Gothic', 'Eurostile', 'Consolas', monospace";
-const ALERT = {
-  DURATION: 2,
-  FADE: 0.25
-};
-const HUD_COLORS = {
-  PANEL_START: "rgba(8, 12, 16, 0.9)",
-  PANEL_END: "rgba(14, 24, 28, 0.82)",
-  PANEL_STROKE: "rgba(120, 170, 180, 0.55)",
-  PANEL_TICK: "rgba(200, 220, 220, 0.18)",
-  PANEL_TEXT: "rgba(230, 240, 240, 0.95)",
-  PANEL_MUTED: "rgba(170, 188, 194, 0.7)",
-  ACCENT: "rgba(120, 200, 190, 0.95)",
-  ACCENT_SOFT: "rgba(120, 200, 190, 0.35)",
-  ACCENT_GLOW: "rgba(120, 200, 190, 0.55)",
-  WARM: "rgba(210, 185, 150, 0.95)",
-  WARNING: "rgba(210, 130, 120, 0.95)",
-  ENEMY: "rgba(200, 110, 110, 0.9)",
-  ASTEROID: "rgba(180, 185, 190, 0.4)",
-  MAP_BG: "rgba(6, 10, 12, 0.65)",
-  MAP_COMPLETE: "rgba(100, 170, 160, 0.1)",
-  ALERT_STROKE: "rgba(6, 10, 12, 0.75)"
-};
-const SHAKE = {
-  DURATION: 0.35,
-  HIT: 6,
-  SURVEY: 3
-};
-const BACKGROUND_SLICE = {
-  DENSITY: 0.001,
-  ALPHA: 0.22,
-  ROT_SPEED: 0.00005,
-  PARALLAX: 0.01,
-  ARC: Math.PI * 1.1
-};
-const BACKGROUND_EVENTS = {
-  MIN_INTERVAL: 3.5,
-  MAX_INTERVAL: 7.5,
-  MAX_ACTIVE: 5,
-  EDGE_MARGIN: 80,
-  CLUSTER_CHANCE: 0.35,
-  CLUSTER_MIN: 2,
-  CLUSTER_MAX: 3,
-  CLUSTER_OFFSET: 140
-};
-const PSYCHE_PALETTE = [
-  [255, 80, 220],
-  [80, 240, 255],
-  [200, 255, 90],
-  [255, 150, 60],
-  [160, 90, 255],
-  [255, 90, 140]
-];
-const NEBULA = {
-  ALPHA: 0.2,
-  ROT_SPEED: 0.00003,
-  PARALLAX: 0.006,
-  RADIUS_SCALE: 0.6,
-  RING_WIDTH: 0.16,
-  BLOB_COUNT: 28
-};
-const THRUST_PARTICLES = {
-  RATE: 36,
-  SPEED_MIN: 40,
-  SPEED_MAX: 140,
-  LIFE_MIN: 0.18,
-  LIFE_MAX: 0.45,
-  SIZE_MIN: 1.4,
-  SIZE_MAX: 3.2,
-  SPREAD: 0.45,
-  OFFSET: 12
-};
-const TOUCH = {
-  DEADZONE: 12,
-  MAX_RADIUS_MIN: 60,
-  MAX_RADIUS_MAX: 110,
-  MOVE_ZONE: 0.5,
-  HINT_ALPHA: 0.22,
-  ACTIVE_ALPHA: 0.45
-};
-const TRAIL_DISPERSE = {
-  BASE_WIDTH: 3,
-  SPREAD: 10
-};
-const TRAIL_SPARKS = {
-  RATE: 18,
-  SPEED_MIN: 30,
-  SPEED_MAX: 160,
-  LIFE_MIN: 0.12,
-  LIFE_MAX: 0.4,
-  SIZE_MIN: 1.1,
-  SIZE_MAX: 2.8,
-  SPREAD: 0.8,
-  OFFSET: 10
-};
-const TRAIL_COLOR = {
-  SPEED: 520,
-  SLOW: [90, 140, 220],
-  FAST: [200, 240, 255]
-};
-class Particle {
-  constructor(x, y, angle, speed, life, color, size) {
-    this.x = x;
-    this.y = y;
-    this.vx = Math.cos(angle) * speed;
-    this.vy = Math.sin(angle) * speed;
-    this.life = life;
-    this.maxLife = life;
-    this.color = color;
-    this.size = size;
-  }
-
-  update(dt) {
-    this.x += this.vx * dt;
-    this.y += this.vy * dt;
-    this.life -= dt;
-  }
-
-  draw(ctx, scale = 1, alphaScale = 1) {
-    const lifeRatio = this.life / this.maxLife;
-    const alpha = lifeRatio * alphaScale;
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = this.color;
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.size * lifeRatio * scale, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  }
-}
-
-class EnemyChunk {
-  constructor(x, y, vx, vy, size, rotationSpeed, life) {
-    this.x = x;
-    this.y = y;
-    this.vx = vx;
-    this.vy = vy;
-    this.size = size;
-    this.rotation = Math.random() * Math.PI * 2;
-    this.rotationSpeed = rotationSpeed;
-    this.life = life;
-    this.maxLife = life;
-  }
-
-  update(dt) {
-    this.x += this.vx * dt;
-    this.y += this.vy * dt;
-    this.rotation += this.rotationSpeed * dt;
-    this.life -= dt;
-  }
-
-  draw(ctx) {
-    const alpha = this.life / this.maxLife;
-    ctx.save();
-    ctx.globalAlpha = Math.max(0, alpha);
-    ctx.translate(this.x, this.y);
-    ctx.rotate(this.rotation);
-    if (ENEMY_CHUNK_SPRITE.complete && ENEMY_CHUNK_SPRITE.naturalWidth > 0) {
-      const scale = this.size / ENEMY_CHUNK_SPRITE.naturalWidth;
-      const drawW = ENEMY_CHUNK_SPRITE.naturalWidth * scale;
-      const drawH = ENEMY_CHUNK_SPRITE.naturalHeight * scale;
-      ctx.drawImage(ENEMY_CHUNK_SPRITE, -drawW / 2, -drawH / 2, drawW, drawH);
-    } else {
-      ctx.fillStyle = "rgba(255, 120, 120, 0.9)";
-      ctx.fillRect(-this.size / 2, -this.size / 2, this.size, this.size);
-    }
-    ctx.restore();
-  }
-}
-
-class FuelPickup {
-  constructor(x, y, vx, vy) {
-    this.x = x;
-    this.y = y;
-    this.vx = vx;
-    this.vy = vy;
-    this.rotation = Math.atan2(vy, vx);
-    const speed = FUEL_PICKUP.ROT_SPEED_MIN
-      + Math.random() * (FUEL_PICKUP.ROT_SPEED_MAX - FUEL_PICKUP.ROT_SPEED_MIN);
-    this.rotationSpeed = (Math.random() < 0.5 ? -1 : 1) * speed;
-  }
-
-  update(dt) {
-    this.rotation += this.rotationSpeed * dt;
-  }
-
-  draw(ctx) {
-    ctx.save();
-    ctx.translate(this.x, this.y);
-    ctx.rotate(this.rotation);
-    if (FUEL_SPRITE.complete && FUEL_SPRITE.naturalWidth > 0) {
-      ctx.drawImage(
-        FUEL_SPRITE,
-        -FUEL_PICKUP.WIDTH / 2,
-        -FUEL_PICKUP.HEIGHT / 2,
-        FUEL_PICKUP.WIDTH,
-        FUEL_PICKUP.HEIGHT
-      );
-    } else {
-      ctx.fillStyle = "rgba(255, 220, 120, 0.9)";
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.rect(
-        -FUEL_PICKUP.WIDTH / 2,
-        -FUEL_PICKUP.HEIGHT / 2,
-        FUEL_PICKUP.WIDTH,
-        FUEL_PICKUP.HEIGHT
-      );
-      ctx.fill();
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-}
-
 const keys = {};
 window.addEventListener("keydown", (e) => {
   keys[e.key.toLowerCase()] = true;
@@ -480,180 +234,34 @@ function drawStarfield(ctx, starfield, offsetX, offsetY, width, height) {
   ctx.drawImage(starfield, ox + width, oy + height);
 }
 
-function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, screenW, screenH, isCompact) {
-  if (!activeSectors || activeSectors.length === 0) {
-    return;
-  }
-  const base = Math.min(screenW, screenH);
-  const edge = isCompact ? 12 : 20;
-  const maxSize = Math.min(screenW - edge * 2, screenH - edge * 2);
-  const desiredSize = isCompact
-    ? Math.min(MINIMAP.SIZE, Math.round(base * 0.28))
-    : MINIMAP.SIZE;
-  const size = Math.max(120, Math.min(desiredSize, maxSize));
-  const range = MINIMAP.RANGE;
-
-  const x0 = screenW - size - edge;
-  const y0 = edge;
-  const cx = x0 + size / 2;
-  const cy = y0 + size / 2;
-
-  ctx.save();
-
-  // background
-  ctx.fillStyle = HUD_COLORS.MAP_BG;
-  ctx.fillRect(x0, y0, size, size);
-
-  ctx.strokeStyle = HUD_COLORS.PANEL_STROKE;
-  ctx.strokeRect(x0, y0, size, size);
-
-  // completed sector background tint
-  for (const sector of activeSectors) {
-    if (!sector.goalDelivered) {
-      continue;
-    }
-    const bx0 = cx + ((sector.bounds.x - ship.x) / range) * (size / 2);
-    const by0 = cy + ((sector.bounds.y - ship.y) / range) * (size / 2);
-    const bSize = (sector.bounds.size / range) * (size / 2);
-    ctx.fillStyle = HUD_COLORS.MAP_COMPLETE;
-    ctx.fillRect(bx0, by0, bSize, bSize);
-  }
-
-  // ship (center)
-  ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
-  ctx.beginPath();
-  ctx.arc(cx, cy, 3, 0, Math.PI * 2);
-  ctx.fill();
-
-  // enemy spawn pings
-  if (enemyPings && enemyPings.length > 0) {
-    for (const ping of enemyPings) {
-      const dx = ping.x - ship.x;
-      const dy = ping.y - ship.y;
-      if (Math.abs(dx) > range || Math.abs(dy) > range) continue;
-      const mx = cx + (dx / range) * (size / 2);
-      const my = cy + (dy / range) * (size / 2);
-      const t = 1 - (ping.life / ping.maxLife);
-      const radius = 4 + t * 10;
-      ctx.strokeStyle = `rgba(200, 110, 110, ${0.6 * (1 - t)})`;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(mx, my, radius, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-  }
-
-  // stars and asteroids
-  for (const sector of activeSectors) {
-    for (const star of sector.stars) {
-      const dx = star.x - ship.x;
-      const dy = star.y - ship.y;
-
-      if (Math.abs(dx) > range || Math.abs(dy) > range) continue;
-
-      const mx = cx + (dx / range) * (size / 2);
-      const my = cy + (dy / range) * (size / 2);
-
-      ctx.fillStyle = star.minimapColor ?? "gold";
-      ctx.beginPath();
-      ctx.arc(mx, my, 4, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    ctx.fillStyle = "rgba(180, 190, 195, 0.8)";
-    for (const asteroid of sector.asteroids) {
-      const dx = asteroid.x - ship.x;
-      const dy = asteroid.y - ship.y;
-
-      if (Math.abs(dx) > range || Math.abs(dy) > range) continue;
-
-      const mx = cx + (dx / range) * (size / 2);
-      const my = cy + (dy / range) * (size / 2);
-
-      ctx.beginPath();
-      ctx.arc(mx, my, 2.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  // enemies
-  if (enemiesInRange && enemiesInRange.length > 0) {
-    for (const enemy of enemiesInRange) {
-      const dx = enemy.x - ship.x;
-      const dy = enemy.y - ship.y;
-      if (Math.abs(dx) > range || Math.abs(dy) > range) continue;
-      const mx = cx + (dx / range) * (size / 2);
-      const my = cy + (dy / range) * (size / 2);
-      const pulse = 0.5 + Math.abs(Math.sin(performance.now() / 250));
-      ctx.fillStyle = `rgba(200, 110, 110, ${0.4 + pulse * 0.45})`;
-      ctx.beginPath();
-      ctx.arc(mx, my, 2.5 + pulse, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  // end zones + goal pickups
-  for (const sector of activeSectors) {
-    const { goal, endZone, goalCollected, goalDelivered } = sector;
-    if (!goalDelivered) {
-      const zdx = endZone.x + endZone.width / 2 - ship.x;
-      const zdy = endZone.y + endZone.height / 2 - ship.y;
-      if (Math.abs(zdx) <= range && Math.abs(zdy) <= range) {
-        const zx = cx + (zdx / range) * (size / 2);
-        const zy = cy + (zdy / range) * (size / 2);
-        ctx.strokeStyle = "rgba(120, 200, 190, 0.8)";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(zx - 5, zy - 5, 10, 10);
-      }
-    }
-
-    if (!goalCollected) {
-      const gdx = goal.x + goal.width / 2 - ship.x;
-      const gdy = goal.y + goal.height / 2 - ship.y;
-      if (Math.abs(gdx) <= range && Math.abs(gdy) <= range) {
-        const gx = cx + (gdx / range) * (size / 2);
-        const gy = cy + (gdy / range) * (size / 2);
-        ctx.fillStyle = "rgba(120, 200, 190, 0.9)";
-        ctx.beginPath();
-        ctx.arc(gx, gy, 3, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-  }
-
-  ctx.restore();
-}
-
-
-export function startGame(canvas, ctx, onGameOver) {
+export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOver) {
   sounds.preload();
   music.start();
   const startX = SECTOR_SIZE / 2;
   const startY = SECTOR_SIZE / 2;
   const ship = new Ship(startX, startY);
   const camera = new Camera(ship);
-  const sectorManager = new SectorManager({ x: startX, y: startY }, START_SAFE_RADIUS);
+  const sectorManager = new SectorManager({
+    worldSeed: Number.isFinite(gameState?.worldSeed) ? gameState.worldSeed : 0,
+    sectorIndex,
+    gameState,
+    startSafeRadius: START_SAFE_RADIUS
+  });
   let sector = sectorManager.getSectorForPosition(
-    ship.x,
-    ship.y,
-    getViewRadius(canvas, camera),
     ship.x,
     ship.y
   );
   let activeSectors = sectorManager.getSectorsAround(
     ship.x,
     ship.y,
-    getViewRadius(canvas, camera),
-    ship.x,
-    ship.y,
     ACTIVE_SECTOR_RANGE
   );
   const trail = [];
-  const SHIP_RADIUS = 12;
-  const TRAIL_MAX = 200;
-  const TRAIL_MIN_DIST = 6;
-  const TRAIL_FADE_SPEED = 24;
-  const TRAIL_FADE_STEP = 0.02;
+  const SHIP_RADIUS = SHIP.COLLISION_RADIUS;
+  const TRAIL_MAX = SHIP.TRAIL.MAX;
+  const TRAIL_MIN_DIST = SHIP.TRAIL.MIN_DIST;
+  const TRAIL_FADE_SPEED = SHIP.TRAIL.FADE_SPEED;
+  const TRAIL_FADE_STEP = SHIP.TRAIL.FADE_STEP;
   let lastTrailX = null;
   let lastTrailY = null;
   let trailFadeTimer = 0;
@@ -664,15 +272,16 @@ export function startGame(canvas, ctx, onGameOver) {
   let nebulaField = null;
   let starfieldW = 0;
   let starfieldH = 0;
-  const STARFIELD_PARALLAX = 0.03;
-  const DUSTFIELD_PARALLAX = 0.015;
-  const FARFIELD_PARALLAX = 0.008;
+  const STARFIELD_PARALLAX = STARFIELD.PARALLAX;
+  const DUSTFIELD_PARALLAX = DUSTFIELD.PARALLAX;
+  const FARFIELD_PARALLAX = FARFIELD.PARALLAX;
   const particles = [];
   const bullets = [];
   const enemyBullets = [];
   const enemies = [];
   const fuelPickups = [];
   const alerts = [];
+  const scorePopups = [];
 
   let lastTime = performance.now();
   let running = true;
@@ -695,7 +304,7 @@ export function startGame(canvas, ctx, onGameOver) {
   let combatScore = 0;
   let scorePulse = 0;
   let fireCooldown = 0;
-  let fireLockout = 0.5;
+  let fireLockout = BULLET.FIRE_LOCKOUT;
   let enemiesSpawned = 0;
   let enemiesInRange = [];
   const enemyPings = [];
@@ -709,6 +318,26 @@ export function startGame(canvas, ctx, onGameOver) {
   const backgroundRecent = [];
   let backgroundClock = 0;
   let nextBackgroundEvent = 0;
+  let lastSectorKey = null;
+  let lastSectorRef = null;
+  let wasInBeaconZone = false;
+  let wasInActiveMotif = false;
+  let beaconScanPenalty = 0;
+  let stateDirty = false;
+  let lastStateSave = 0;
+  let calibrationScore = 0;
+  let gateSpawnTimer = randomRange(CALIBRATION_GATE.SPAWN_MIN, CALIBRATION_GATE.SPAWN_MAX);
+  let activeGates = [];
+  let chainProgress = 0;
+  let gateCorrection = null;
+  let controlsDisabledTimer = 0;
+  let deathPauseActive = false;
+  let deathModal = null;
+  const beaconSignal = {
+    phase: 0,
+    motif: "INVOCATION",
+    strength: 0
+  };
   const mouse = {
     x: canvas.width / 2,
     y: canvas.height / 2,
@@ -725,7 +354,7 @@ export function startGame(canvas, ctx, onGameOver) {
     moveY: 0,
     isActive: false
   };
-  const mouseAimStorageKey = "spaceSurveyor_mouseAim";
+  const mouseAimStorageKey = STORAGE.MOUSE_AIM_KEY;
   let mouseAimEnabled = true;
   let wheelZoomStep = 0;
   const pinch = {
@@ -913,13 +542,36 @@ export function startGame(canvas, ctx, onGameOver) {
     ship.stopThrustLoop();
   }
 
-  function addScore(points, applyMultiplier = false, trackCombat = false) {
+  function getScorePopupColor(eventType) {
+    return SCORE_POPUP_COLORS[eventType] ?? SCORE_POPUP_COLORS.generic;
+  }
+
+  function spawnScorePopup(value, worldPos, eventType) {
+    if (!worldPos || !Number.isFinite(worldPos.x) || !Number.isFinite(worldPos.y)) {
+      return;
+    }
+    const display = Math.max(0, Math.round(value));
+    if (display <= 0) {
+      return;
+    }
+    scorePopups.push({
+      value: display,
+      x: worldPos.x,
+      y: worldPos.y,
+      age: 0,
+      life: SCORE_POPUP.LIFE,
+      color: getScorePopupColor(eventType)
+    });
+  }
+
+  function addScore(points, applyMultiplier = false, trackCombat = false, worldPos = null, eventType = "generic") {
     const applied = applyMultiplier ? points * scoreMultiplier : points;
     score += applied;
     if (trackCombat) {
       combatScore += points;
     }
     scorePulse = Math.min(2.0, scorePulse + 0.8);
+    spawnScorePopup(applied, worldPos, eventType);
   }
 
   function queueRespawn() {
@@ -934,6 +586,717 @@ export function startGame(canvas, ctx, onGameOver) {
       start: alertClock + delay,
       duration
     });
+  }
+
+  function getGateWidth(type) {
+    const multiplier = CALIBRATION_GATE.WIDTH_MULTIPLIERS[type] ?? 1.6;
+    return CALIBRATION_SHIP_RADIUS * 2 * multiplier;
+  }
+
+  function getGateColor(type) {
+    if (type === CALIBRATION_GATE.TYPES.DISPLACEMENT) return CALIBRATION_GATE.COLORS.DISPLACEMENT;
+    if (type === CALIBRATION_GATE.TYPES.EXIT) return CALIBRATION_GATE.COLORS.EXIT;
+    if (type === CALIBRATION_GATE.TYPES.SHUTDOWN) return CALIBRATION_GATE.COLORS.SHUTDOWN;
+    return CALIBRATION_GATE.COLORS.CHAIN;
+  }
+
+  function pickGateType() {
+    const types = Object.values(CALIBRATION_GATE.TYPES);
+    const weights = CALIBRATION_GATE.WEIGHTS;
+    let total = 0;
+    for (const type of types) {
+      total += Math.max(0, weights?.[type] ?? 0);
+    }
+    if (total <= 0) {
+      return CALIBRATION_GATE.TYPES.CHAIN;
+    }
+    let roll = Math.random() * total;
+    for (const type of types) {
+      const weight = Math.max(0, weights?.[type] ?? 0);
+      roll -= weight;
+      if (roll <= 0) {
+        return type;
+      }
+    }
+    return types[types.length - 1];
+  }
+
+  function isSectorGateEligible(currentSector) {
+    if (!currentSector) {
+      return false;
+    }
+    if (currentSector.sectorType === SECTOR_TYPES.SIGNAL_ORIGIN) {
+      return false;
+    }
+    if (currentSector.sectorType === SECTOR_TYPES.DEAD_QUIET) {
+      return false;
+    }
+    return true;
+  }
+
+  function rectContainsPoint(rect, px, py) {
+    return px >= rect.x && px <= rect.x + rect.width
+      && py >= rect.y && py <= rect.y + rect.height;
+  }
+
+  function distanceToRect(rect, px, py) {
+    const cx = clampValue(px, rect.x, rect.x + rect.width);
+    const cy = clampValue(py, rect.y, rect.y + rect.height);
+    return Math.hypot(px - cx, py - cy);
+  }
+
+  function getTravelDirection() {
+    const speed = Math.hypot(ship.vx, ship.vy);
+    if (speed > 1) {
+      return { x: ship.vx / speed, y: ship.vy / speed };
+    }
+    return { x: Math.sin(ship.heading), y: -Math.cos(ship.heading) };
+  }
+
+  function getNearestCalibrationTarget() {
+    let best = null;
+    for (const current of activeSectors) {
+      if (current.goal && !current.goalCollected) {
+        const gx = current.goal.x + current.goal.width / 2;
+        const gy = current.goal.y + current.goal.height / 2;
+        const dist = Math.hypot(gx - ship.x, gy - ship.y);
+        if (!best || dist < best.dist) {
+          best = { x: gx, y: gy, dist };
+        }
+      }
+      if (current.endZone && !current.goalDelivered) {
+        const ex = current.endZone.x + current.endZone.width / 2;
+        const ey = current.endZone.y + current.endZone.height / 2;
+        const dist = Math.hypot(ex - ship.x, ey - ship.y);
+        if (!best || dist < best.dist) {
+          best = { x: ex, y: ey, dist };
+        }
+      }
+    }
+    return best;
+  }
+
+  function getExitTarget() {
+    const target = getNearestCalibrationTarget();
+    if (target) {
+      return target;
+    }
+    const dir = getTravelDirection();
+    const fallbackDist = SECTOR_SIZE * 0.6;
+    return { x: ship.x + dir.x * fallbackDist, y: ship.y + dir.y * fallbackDist };
+  }
+
+  function rotateVector(vec, angle) {
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    return {
+      x: vec.x * cos - vec.y * sin,
+      y: vec.x * sin + vec.y * cos
+    };
+  }
+
+  function isWithinBounds(point, bounds, margin) {
+    return point.x >= bounds.x + margin
+      && point.x <= bounds.x + bounds.size - margin
+      && point.y >= bounds.y + margin
+      && point.y <= bounds.y + bounds.size - margin;
+  }
+
+  function isGateLocationClear(candidate, halfSpan) {
+    if (sector.goal && !sector.goalCollected) {
+      if (rectContainsPoint(sector.goal, candidate.x, candidate.y)) {
+        return false;
+      }
+      if (distanceToRect(sector.goal, candidate.x, candidate.y) < CALIBRATION_GATE.EXCLUSION_RADIUS) {
+        return false;
+      }
+    }
+    if (sector.endZone && !sector.goalDelivered) {
+      if (rectContainsPoint(sector.endZone, candidate.x, candidate.y)) {
+        return false;
+      }
+      if (distanceToRect(sector.endZone, candidate.x, candidate.y) < CALIBRATION_GATE.EXCLUSION_RADIUS) {
+        return false;
+      }
+    }
+
+    for (const star of sector.stars) {
+      const starRadius = Number.isFinite(star.gravityRadius) ? star.gravityRadius : 0;
+      if (starRadius <= 0) {
+        continue;
+      }
+      const dx = candidate.x - star.x;
+      const dy = candidate.y - star.y;
+      if (Math.hypot(dx, dy) < starRadius + halfSpan) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function buildGate(type, center, axis, normal, width, poleRadius) {
+    return {
+      type,
+      center,
+      axis,
+      normal,
+      width,
+      poleRadius,
+      color: getGateColor(type),
+      thickness: CALIBRATION_GATE.BASE_THICKNESS,
+      state: "spawning",
+      fadeTimer: 0,
+      lifeTimer: 0,
+      prevPlane: null,
+      resolved: false
+    };
+  }
+
+  function createSingleGate(viewRadius, type, bounds, dir, axis, margin) {
+    const apertureWidth = getGateWidth(type);
+    const poleRadius = apertureWidth * CALIBRATION_GATE.POLE_RATIO;
+    const halfSpan = apertureWidth / 2 + poleRadius;
+    const maxDist = viewRadius - CALIBRATION_GATE.EDGE_OFFSET - halfSpan;
+    if (maxDist <= 0) {
+      return null;
+    }
+    const minDist = Math.max(halfSpan, maxDist * 0.9);
+
+    for (let tries = 0; tries < 12; tries++) {
+      const distance = randomRange(minDist, maxDist);
+      const lateral = randomRange(-CALIBRATION_GATE.SPAWN_LATERAL, CALIBRATION_GATE.SPAWN_LATERAL);
+      const candidate = {
+        x: ship.x + dir.x * distance + axis.x * lateral,
+        y: ship.y + dir.y * distance + axis.y * lateral
+      };
+      candidate.x = clampValue(candidate.x, bounds.x + margin, bounds.x + bounds.size - margin);
+      candidate.y = clampValue(candidate.y, bounds.y + margin, bounds.y + bounds.size - margin);
+
+      if (!isGateLocationClear(candidate, halfSpan)) {
+        continue;
+      }
+
+      return buildGate(type, candidate, axis, dir, apertureWidth, poleRadius);
+    }
+    return null;
+  }
+
+  function createChainGateSeries(viewRadius, bounds, dir, axis, margin) {
+    const type = CALIBRATION_GATE.TYPES.CHAIN;
+    const apertureWidth = getGateWidth(type);
+    const poleRadius = apertureWidth * CALIBRATION_GATE.POLE_RATIO;
+    const halfSpan = apertureWidth / 2 + poleRadius;
+    const maxDist = viewRadius - CALIBRATION_GATE.EDGE_OFFSET - halfSpan;
+    if (maxDist <= 0) {
+      return null;
+    }
+    const minDist = Math.max(halfSpan, maxDist * 0.9);
+    const chainCount = Math.floor(
+      randomRange(CALIBRATION_GATE.CHAIN_MIN, CALIBRATION_GATE.CHAIN_MAX + 1)
+    );
+
+    const turnDir = Math.random() < 0.5 ? -1 : 1;
+    for (let attempt = 0; attempt < CALIBRATION_GATE.CHAIN_ATTEMPTS; attempt++) {
+      const radius = randomRange(minDist, maxDist);
+      const span = randomRange(CALIBRATION_GATE.CHAIN_ARC_MIN, CALIBRATION_GATE.CHAIN_ARC_MAX);
+      const step = chainCount > 1 ? span / (chainCount - 1) : 0;
+      const start = 0;
+      const gates = [];
+      let valid = true;
+
+      for (let i = 0; i < chainCount; i++) {
+        const arcDir = rotateVector(dir, (start + step * i) * turnDir);
+        const candidate = {
+          x: ship.x + arcDir.x * radius,
+          y: ship.y + arcDir.y * radius
+        };
+        if (!isWithinBounds(candidate, bounds, margin)) {
+          valid = false;
+          break;
+        }
+        if (!isGateLocationClear(candidate, halfSpan)) {
+          valid = false;
+          break;
+        }
+        gates.push(buildGate(type, candidate, axis, dir, apertureWidth, poleRadius));
+      }
+
+      if (valid) {
+        return gates;
+      }
+    }
+    return null;
+  }
+
+  function createGate(viewRadius) {
+    if (!isSectorGateEligible(sector)) {
+      return null;
+    }
+    if (!Number.isFinite(viewRadius) || viewRadius <= 0) {
+      return null;
+    }
+    const bounds = sector.bounds;
+    const dir = getTravelDirection();
+    const axis = { x: -dir.y, y: dir.x };
+    const margin = 260;
+    const type = pickGateType();
+
+    if (type === CALIBRATION_GATE.TYPES.CHAIN) {
+      return createChainGateSeries(viewRadius, bounds, dir, axis, margin);
+    }
+
+    const single = createSingleGate(viewRadius, type, bounds, dir, axis, margin);
+    return single ? [single] : null;
+  }
+
+  function applyGateEffect(gate) {
+    const type = gate.type;
+    const target = getNearestCalibrationTarget();
+    sounds.play("got_gate");
+    if (type === CALIBRATION_GATE.TYPES.CHAIN) {
+      calibrationScore += 1;
+      chainProgress += 1;
+      const points = CALIBRATION_GATE.CHAIN_SCORE_BASE * chainProgress;
+      addScore(points, false, false, gate.center, "chain");
+      return;
+    }
+    addScore(CALIBRATION_GATE.GATE_SCORE_BASE, false, false, gate.center, "gate");
+    if (type === CALIBRATION_GATE.TYPES.DISPLACEMENT) {
+      if (!target) {
+        return;
+      }
+      const dx = target.x - ship.x;
+      const dy = target.y - ship.y;
+      const dist = Math.hypot(dx, dy) || 1;
+      const dirX = dx / dist;
+      const dirY = dy / dist;
+      const offset = Math.max(CALIBRATION_GATE.EXCLUSION_RADIUS, 240);
+      ship.x = target.x - dirX * offset;
+      ship.y = target.y - dirY * offset;
+      lastShipX = ship.x;
+      lastShipY = ship.y;
+      lastTrailX = ship.x;
+      lastTrailY = ship.y;
+      trail.length = 0;
+      const heading = Math.atan2(dx, -dy);
+      ship.heading = heading;
+      const speed = clampValue(Math.hypot(ship.vx, ship.vy), CALIBRATION_GATE.CRUISE_MIN, CALIBRATION_GATE.CRUISE_MAX);
+      ship.vx = Math.sin(heading) * speed;
+      ship.vy = -Math.cos(heading) * speed;
+      gateCorrection = null;
+      return;
+    }
+    if (type === CALIBRATION_GATE.TYPES.SHUTDOWN) {
+      controlsDisabledTimer = Math.max(controlsDisabledTimer, CONTROL_DISABLE.DURATION);
+      ship.stopThrustLoop();
+      ship.stopRotateLoop();
+      ship.thrusting = 0;
+      return;
+    }
+    if (type === CALIBRATION_GATE.TYPES.EXIT) {
+      const desired = getExitTarget();
+      const dx = desired.x - ship.x;
+      const dy = desired.y - ship.y;
+      const heading = Math.atan2(dx, -dy);
+      ship.heading = heading;
+      ship.vx = Math.sin(heading) * CALIBRATION_GATE.CRUISE_SPEED;
+      ship.vy = -Math.cos(heading) * CALIBRATION_GATE.CRUISE_SPEED;
+      gateCorrection = null;
+    }
+  }
+
+  function updateGate(dt) {
+    if (activeGates.length === 0) {
+      return;
+    }
+    const remaining = [];
+    for (const gate of activeGates) {
+      if (gate.state === "spawning") {
+        gate.fadeTimer += dt;
+        if (gate.fadeTimer >= CALIBRATION_GATE.FADE_TIME) {
+          gate.state = "active";
+          gate.fadeTimer = 0;
+        }
+        remaining.push(gate);
+        continue;
+      }
+
+      if (gate.state === "active") {
+        gate.lifeTimer += dt;
+        if (gate.lifeTimer >= CALIBRATION_GATE.LIFETIME) {
+          gate.state = "fading";
+          gate.fadeTimer = 0;
+          remaining.push(gate);
+          continue;
+        }
+
+        const dx = ship.x - gate.center.x;
+        const dy = ship.y - gate.center.y;
+        const planeDist = dx * gate.normal.x + dy * gate.normal.y;
+        if (gate.prevPlane !== null) {
+          if ((gate.prevPlane > 0 && planeDist <= 0) || (gate.prevPlane < 0 && planeDist >= 0)) {
+            const lateral = Math.abs(dx * gate.axis.x + dy * gate.axis.y);
+            if (lateral <= gate.width / 2) {
+              gate.resolved = true;
+              applyGateEffect(gate);
+            }
+            gate.state = "fading";
+            gate.fadeTimer = 0;
+          }
+        }
+        gate.prevPlane = planeDist;
+        remaining.push(gate);
+        continue;
+      }
+
+      if (gate.state === "fading") {
+        gate.fadeTimer += dt;
+        if (gate.fadeTimer < CALIBRATION_GATE.FADE_TIME) {
+          remaining.push(gate);
+        }
+      }
+    }
+    activeGates = remaining;
+  }
+
+  function applyGateCorrection(dt) {
+    if (!gateCorrection) {
+      return;
+    }
+    gateCorrection.elapsed += dt;
+    const t = clampValue(gateCorrection.elapsed / gateCorrection.duration, 0, 1);
+    const heading = lerpAngle(gateCorrection.startHeading, gateCorrection.targetHeading, t);
+    const speed = gateCorrection.startSpeed + (gateCorrection.targetSpeed - gateCorrection.startSpeed) * t;
+    ship.heading = heading;
+    ship.vx = Math.sin(heading) * speed;
+    ship.vy = -Math.cos(heading) * speed;
+    if (t >= 1) {
+      gateCorrection = null;
+    }
+  }
+
+  function drawGate(ctx) {
+    if (activeGates.length === 0) {
+      return;
+    }
+    for (const gate of activeGates) {
+      const fade = gate.state === "spawning"
+        ? clampValue(gate.fadeTimer / CALIBRATION_GATE.FADE_TIME, 0, 1)
+        : gate.state === "fading"
+          ? 1 - clampValue(gate.fadeTimer / CALIBRATION_GATE.FADE_TIME, 0, 1)
+          : 1;
+      if (fade <= 0) {
+        continue;
+      }
+
+      const axis = gate.axis;
+      const normal = gate.normal;
+      const half = gate.width / 2;
+      const left = {
+        x: gate.center.x - axis.x * half,
+        y: gate.center.y - axis.y * half
+      };
+      const right = {
+        x: gate.center.x + axis.x * half,
+        y: gate.center.y + axis.y * half
+      };
+      const poleRadius = gate.poleRadius * (gate.type === CALIBRATION_GATE.TYPES.DISPLACEMENT ? 1.15 : 1);
+      const color = gate.color;
+
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = fade;
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = gate.thickness;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 10;
+
+      if (gate.type === CALIBRATION_GATE.TYPES.CHAIN) {
+        const offset = gate.thickness * 2;
+        ctx.lineWidth = gate.thickness;
+        ctx.beginPath();
+        ctx.moveTo(left.x + normal.x * offset, left.y + normal.y * offset);
+        ctx.lineTo(right.x + normal.x * offset, right.y + normal.y * offset);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(left.x - normal.x * offset, left.y - normal.y * offset);
+        ctx.lineTo(right.x - normal.x * offset, right.y - normal.y * offset);
+        ctx.stroke();
+      } else if (gate.type === CALIBRATION_GATE.TYPES.DISPLACEMENT) {
+        ctx.lineWidth = gate.thickness * 2.8;
+        ctx.beginPath();
+        ctx.moveTo(left.x, left.y);
+        ctx.lineTo(right.x, right.y);
+        ctx.stroke();
+      } else if (gate.type === CALIBRATION_GATE.TYPES.SHUTDOWN) {
+        ctx.lineWidth = gate.thickness * 2.4;
+        ctx.beginPath();
+        ctx.moveTo(left.x, left.y);
+        ctx.lineTo(right.x, right.y);
+        ctx.stroke();
+      } else if (gate.type === CALIBRATION_GATE.TYPES.EXIT) {
+        ctx.lineWidth = gate.thickness * 1.4;
+        const dashLen = gate.thickness * 4;
+        const gap = gate.thickness * 3;
+        const total = gate.width;
+        let drawn = 0;
+        while (drawn < total) {
+          const seg = Math.min(dashLen, total - drawn);
+          const t0 = drawn / total;
+          const t1 = (drawn + seg) / total;
+          ctx.beginPath();
+          ctx.moveTo(left.x + (right.x - left.x) * t0, left.y + (right.y - left.y) * t0);
+          ctx.lineTo(left.x + (right.x - left.x) * t1, left.y + (right.y - left.y) * t1);
+          ctx.stroke();
+          drawn += seg + gap;
+        }
+      }
+
+      ctx.lineWidth = 2;
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.arc(left.x, left.y, poleRadius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(right.x, right.y, poleRadius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      if (gate.type === CALIBRATION_GATE.TYPES.EXIT) {
+        const notchSize = poleRadius * 0.45;
+        const notchDir = { x: normal.x, y: normal.y };
+        ctx.beginPath();
+        ctx.moveTo(left.x + notchDir.x * notchSize, left.y + notchDir.y * notchSize);
+        ctx.lineTo(left.x + axis.x * notchSize * 0.4, left.y + axis.y * notchSize * 0.4);
+        ctx.lineTo(left.x - axis.x * notchSize * 0.4, left.y - axis.y * notchSize * 0.4);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(right.x + notchDir.x * notchSize, right.y + notchDir.y * notchSize);
+        ctx.lineTo(right.x + axis.x * notchSize * 0.4, right.y + axis.y * notchSize * 0.4);
+        ctx.lineTo(right.x - axis.x * notchSize * 0.4, right.y - axis.y * notchSize * 0.4);
+        ctx.closePath();
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    }
+  }
+
+  function markStateDirty() {
+    stateDirty = true;
+  }
+
+  function saveStateIfNeeded() {
+    if (!gameState) {
+      return;
+    }
+    if (!stateDirty) {
+      return;
+    }
+    if (timeSpent - lastStateSave < 2) {
+      return;
+    }
+    saveGameState(gameState);
+    lastStateSave = timeSpent;
+    stateDirty = false;
+  }
+
+  function pauseForLifeLoss(outcome) {
+    if (deathPauseActive) {
+      return;
+    }
+    deathPauseActive = true;
+    ship.stopThrustLoop();
+    ship.stopRotateLoop();
+    if (deathModal && typeof deathModal.close === "function") {
+      deathModal.close();
+    }
+    deathModal = showShipDestroyedModal(uiRoot, lives, () => {
+      deathPauseActive = false;
+      deathModal = null;
+      if (outcome === "respawn") {
+        queueRespawn();
+      } else if (outcome === "gameover") {
+        endGame();
+      }
+    });
+  }
+
+  function handleLifeLoss(explosionType) {
+    triggerShake(SHAKE.HIT);
+    if (explosionType) {
+      spawnExplosion(particles, ship.x, ship.y, explosionType);
+    }
+    lives -= 1;
+    shipVisible = false;
+    if (lives <= 0) {
+      sounds.play("game_over");
+      pauseForLifeLoss("gameover");
+      return;
+    }
+    sounds.play("lost_life");
+    pauseForLifeLoss("respawn");
+  }
+
+  function pushLimited(list, entry, max) {
+    if (!Array.isArray(list)) {
+      return;
+    }
+    list.push(entry);
+    if (list.length > max) {
+      list.splice(0, list.length - max);
+    }
+  }
+
+  function getSectorKey(sector) {
+    return sector ? `${sector.sx},${sector.sy}` : "";
+  }
+
+  function ensureSectorMeta(sector) {
+    if (!sector) {
+      return null;
+    }
+    const meta = getSectorMeta(sectorIndex, sector.sx, sector.sy);
+    if (meta) {
+      return meta;
+    }
+    const fallback = {
+      sectorType: sector.sectorType ?? SECTOR_TYPES.GENERIC,
+      sectorMood: sector.sectorMood ?? "NEUTRAL",
+      beaconPlaced: Boolean(sector.beacon),
+      beaconPosition: sector.beacon ? { x: sector.beacon.x, y: sector.beacon.y } : null,
+      generatedAtExposure: Math.max(0, gameState?.beacon?.exposure ?? 0),
+      visited: false,
+      surveyComplete: false,
+      lastVisitedAt: null,
+      anomalyModifier: sector.anomalyModifier ?? null,
+      echoTag: sector.echoTag ?? null
+    };
+    setSectorMeta(sectorIndex, sector.sx, sector.sy, fallback);
+    saveSectorIndex(sectorIndex);
+    return fallback;
+  }
+
+  function updateSectorMeta(sector, updater) {
+    const meta = ensureSectorMeta(sector);
+    if (!meta) {
+      return null;
+    }
+    updater(meta);
+    setSectorMeta(sectorIndex, sector.sx, sector.sy, meta);
+    saveSectorIndex(sectorIndex);
+    return meta;
+  }
+
+  function isActiveMotif(motif) {
+    return motif === "INVOCATION" || motif === "RESPONSE";
+  }
+
+  function updateBeaconSignal(dt, observing) {
+    const cycle = BEACON.SIGNAL_CYCLE;
+    const step = dt / cycle;
+    beaconSignal.phase = (beaconSignal.phase + step) % 1;
+    const phase = beaconSignal.phase;
+    if (phase < 0.25) {
+      beaconSignal.motif = "INVOCATION";
+    } else if (phase < 0.5) {
+      beaconSignal.motif = "RESPONSE";
+    } else if (phase < 0.75) {
+      beaconSignal.motif = "DRIFT";
+    } else {
+      beaconSignal.motif = "FRACTURE";
+    }
+    const pulseRate = observing ? 3.1 : 2.4;
+    const pulse = 0.5 + 0.5 * Math.sin(phase * Math.PI * 2 * pulseRate);
+    beaconSignal.strength = 0.35 + 0.65 * pulse;
+  }
+
+  function applyBeaconExposure(delta) {
+    if (!gameState?.beacon) {
+      return;
+    }
+    gameState.beacon.exposure = Math.max(0, (gameState.beacon.exposure ?? 0) + delta);
+    markStateDirty();
+  }
+
+  function shouldHedge(exposure) {
+    return exposure >= 0.6;
+  }
+
+  function hedgeText(text, exposure) {
+    if (!shouldHedge(exposure)) {
+      return text;
+    }
+    const hedges = [
+      `Signal suggests: ${text}`,
+      `Uncertain reading: ${text}`,
+      `Appears consistent with: ${text}`
+    ];
+    const index = Math.floor(((exposure * 10) % hedges.length));
+    return hedges[index];
+  }
+
+  function getSectorAlert(sector, meta, exposure) {
+    if (!sector || !meta) {
+      return null;
+    }
+    const type = meta.sectorType ?? sector.sectorType ?? SECTOR_TYPES.GENERIC;
+    if (meta.surveyComplete && type !== SECTOR_TYPES.SIGNAL_ORIGIN) {
+      return null;
+    }
+    if (type === SECTOR_TYPES.GENERIC) {
+      return null;
+    }
+    if (type === SECTOR_TYPES.SIGNAL_ORIGIN) {
+      return hedgeText("Signal origin detected.", exposure);
+    }
+    if (type === SECTOR_TYPES.DEAD_QUIET) {
+      return hedgeText("Dead quiet sector.", exposure);
+    }
+    if (type === SECTOR_TYPES.DERELICT_FIELD) {
+      return hedgeText("Derelict field signatures.", exposure);
+    }
+    if (type === SECTOR_TYPES.ANOMALY) {
+      return hedgeText("Anomalous scan return.", exposure);
+    }
+    if (type === SECTOR_TYPES.ECHO) {
+      if (meta.echoTag) {
+        return hedgeText(`Echo pattern aligns with ${meta.echoTag}.`, exposure);
+      }
+      return hedgeText("Echo signatures detected.", exposure);
+    }
+    return null;
+  }
+
+  function getAnomalyEffects(sector, timeMs) {
+    if (!sector?.anomalyModifier) {
+      return null;
+    }
+    const t = timeMs * 0.001;
+    const modifier = sector.anomalyModifier;
+    if (modifier === "SCANNER_JITTER") {
+      return {
+        jitter: Math.sin(t * 6.2) * 0.06
+      };
+    }
+    if (modifier === "RANGE_DRIFT") {
+      return {
+        radiusOffset: Math.sin(t * 0.8) * 6,
+        rangeScale: 1 + Math.sin(t * 0.6) * 0.04
+      };
+    }
+    if (modifier === "ORIENTATION_DRIFT") {
+      return {
+        angleOffset: Math.sin(t * 0.35) * 0.08
+      };
+    }
+    if (modifier === "PULSE_GHOSTS") {
+      return {
+        ghostPulse: 0.5 + 0.5 * Math.sin(t * 2.4)
+      };
+    }
+    return null;
   }
 
   function triggerShake(strength, duration = SHAKE.DURATION) {
@@ -1184,6 +1547,19 @@ export function startGame(canvas, ctx, onGameOver) {
     }
   }
 
+  function updateScorePopups(dt) {
+    if (scorePopups.length === 0) {
+      return;
+    }
+    for (let i = scorePopups.length - 1; i >= 0; i--) {
+      const popup = scorePopups[i];
+      popup.age += dt;
+      if (popup.age >= popup.life) {
+        scorePopups.splice(i, 1);
+      }
+    }
+  }
+
   function loop(time) {
     if (!running) {
       return;
@@ -1201,17 +1577,26 @@ export function startGame(canvas, ctx, onGameOver) {
   }
 
   function update(dt) {
-    updateParticles(dt);
-    updateEnemyBullets(dt);
-    updateEnemyPings(dt);
+    updateParticles(particles, dt);
+    updateEnemyBullets(enemyBullets, enemies, ship, SHIP_RADIUS, invulnTimer, shipVisible, handleLifeLoss, dt);
+    updateEnemyPings(enemyPings, dt);
     updateAlerts(dt);
+    updateScorePopups(dt);
     updateShake(dt);
     updateBackgroundEvents(dt);
+    if (controlsDisabledTimer > 0) {
+      controlsDisabledTimer = Math.max(0, controlsDisabledTimer - dt);
+    }
+    if (deathPauseActive) {
+      saveStateIfNeeded();
+      return;
+    }
     if (pendingGameOver) {
       gameOverTimer = Math.max(0, gameOverTimer - dt);
       if (gameOverTimer === 0) {
         finalizeGameOver();
       }
+      saveStateIfNeeded();
       return;
     }
     if (respawnTimer > 0) {
@@ -1220,49 +1605,57 @@ export function startGame(canvas, ctx, onGameOver) {
         respawn();
         shipVisible = true;
       }
+      saveStateIfNeeded();
       return;
     }
+    const controlsDisabled = controlsDisabledTimer > 0;
     let externalInput = null;
     let keyboardRotationInput = 0;
-    if (keys["arrowleft"] || keys["a"]) keyboardRotationInput -= 1;
-    if (keys["arrowright"] || keys["d"]) keyboardRotationInput += 1;
     let keyboardThrustInput = 0;
-    if (keys["arrowup"] || keys["w"]) keyboardThrustInput = 1;
-    if (keys["arrowdown"] || keys["s"]) keyboardThrustInput = -1;
-    if (mouseAimEnabled && mouse.hasMoved) {
-      const centerX = canvas.width / 2 + camera.shakeX;
-      const centerY = canvas.height / 2 + camera.shakeY;
-      const worldX = (mouse.x - centerX) / camera.zoom + ship.x;
-      const worldY = (mouse.y - centerY) / camera.zoom + ship.y;
-      const dx = worldX - ship.x;
-      const dy = worldY - ship.y;
-      if (keyboardRotationInput === 0) {
-        externalInput = externalInput || {};
-        externalInput.aimAngle = Math.atan2(dx, -dy);
+    if (!controlsDisabled) {
+      if (keys["arrowleft"] || keys["a"]) keyboardRotationInput -= 1;
+      if (keys["arrowright"] || keys["d"]) keyboardRotationInput += 1;
+      if (keys["arrowup"] || keys["w"]) keyboardThrustInput = 1;
+      if (keys["arrowdown"] || keys["s"]) keyboardThrustInput = -1;
+      if (mouseAimEnabled && mouse.hasMoved) {
+        const centerX = canvas.width / 2 + camera.shakeX;
+        const centerY = canvas.height / 2 + camera.shakeY;
+        const worldX = (mouse.x - centerX) / camera.zoom + ship.x;
+        const worldY = (mouse.y - centerY) / camera.zoom + ship.y;
+        const dx = worldX - ship.x;
+        const dy = worldY - ship.y;
+        if (keyboardRotationInput === 0) {
+          externalInput = externalInput || {};
+          externalInput.aimAngle = Math.atan2(dx, -dy);
+        }
+        if (mouse.rightDown && keyboardThrustInput === 0) {
+          externalInput = externalInput || {};
+          externalInput.thrustInput = 1;
+        }
       }
-      if (mouse.rightDown && keyboardThrustInput === 0) {
-        externalInput = externalInput || {};
-        externalInput.thrustInput = 1;
+      if (touch.moveId !== null) {
+        const dx = touch.moveX - touch.moveStartX;
+        const dy = touch.moveY - touch.moveStartY;
+        const dist = Math.hypot(dx, dy);
+        const maxRadius = Math.min(
+          TOUCH.MAX_RADIUS_MAX,
+          Math.max(TOUCH.MAX_RADIUS_MIN, Math.min(canvas.width, canvas.height) * 0.16)
+        );
+        if (dist > TOUCH.DEADZONE && keyboardRotationInput === 0) {
+          externalInput = externalInput || {};
+          externalInput.aimAngle = Math.atan2(dx, -dy);
+        }
+        if (dist > TOUCH.DEADZONE && keyboardThrustInput === 0) {
+          externalInput = externalInput || {};
+          externalInput.thrustInput = Math.min(1, dist / maxRadius);
+        }
       }
     }
-    if (touch.moveId !== null) {
-      const dx = touch.moveX - touch.moveStartX;
-      const dy = touch.moveY - touch.moveStartY;
-      const dist = Math.hypot(dx, dy);
-      const maxRadius = Math.min(
-        TOUCH.MAX_RADIUS_MAX,
-        Math.max(TOUCH.MAX_RADIUS_MIN, Math.min(canvas.width, canvas.height) * 0.16)
-      );
-      if (dist > TOUCH.DEADZONE && keyboardRotationInput === 0) {
-        externalInput = externalInput || {};
-        externalInput.aimAngle = Math.atan2(dx, -dy);
-      }
-      if (dist > TOUCH.DEADZONE && keyboardThrustInput === 0) {
-        externalInput = externalInput || {};
-        externalInput.thrustInput = Math.min(1, dist / maxRadius);
-      }
+    if (controlsDisabled) {
+      externalInput = { disableControls: true };
     }
     ship.update(dt, externalInput);
+    applyGateCorrection(dt);
     spawnThrustParticles(dt);
     timeSpent += dt;
     if (invulnTimer > 0) {
@@ -1277,23 +1670,107 @@ export function startGame(canvas, ctx, onGameOver) {
     if (scorePulse > 0) {
       scorePulse = Math.max(0, scorePulse - dt * 2.6);
     }
-    updateBullets(dt);
+    updateBullets(bullets, dt);
 
-    sector = sectorManager.getSectorForPosition(
-      ship.x,
-      ship.y,
-      getViewRadius(canvas, camera),
-      ship.x,
-      ship.y
-    );
-    activeSectors = sectorManager.getSectorsAround(
-      ship.x,
-      ship.y,
-      getViewRadius(canvas, camera),
-      ship.x,
-      ship.y,
-      ACTIVE_SECTOR_RANGE
-    );
+    sector = sectorManager.getSectorForPosition(ship.x, ship.y);
+    activeSectors = sectorManager.getSectorsAround(ship.x, ship.y, ACTIVE_SECTOR_RANGE);
+
+    const viewRadius = getViewRadius(canvas, camera);
+    if (activeGates.length === 0) {
+      gateSpawnTimer -= dt;
+      if (gateSpawnTimer <= 0) {
+        const spawned = createGate(viewRadius);
+        if (Array.isArray(spawned) && spawned.length > 0) {
+          activeGates = spawned;
+          chainProgress = 0;
+        }
+        const spawnScale = clampValue(
+          viewRadius / CALIBRATION_GATE.BASE_VIEW_RADIUS,
+          0.7,
+          1.6
+        );
+        gateSpawnTimer = randomRange(CALIBRATION_GATE.SPAWN_MIN, CALIBRATION_GATE.SPAWN_MAX) * spawnScale;
+      }
+    }
+
+    const sectorKey = getSectorKey(sector);
+    if (sectorKey && sectorKey !== lastSectorKey) {
+      if (lastSectorRef && wasInBeaconZone && wasInActiveMotif && lastSectorRef.sectorType === SECTOR_TYPES.SIGNAL_ORIGIN) {
+        if (gameState?.beacon) {
+          gameState.beacon.leftMidCycleCount = (gameState.beacon.leftMidCycleCount ?? 0) + 1;
+          applyBeaconExposure(-BEACON.MIDCYCLE_PENALTY);
+        }
+      }
+
+      const meta = updateSectorMeta(sector, (entry) => {
+        entry.visited = true;
+        entry.lastVisitedAt = Date.now();
+      });
+      const exposure = gameState?.beacon?.exposure ?? 0;
+      const alertText = getSectorAlert(sector, meta, exposure);
+      if (alertText) {
+        queueAlert(alertText, 0, ALERT.DURATION * 1.2);
+      }
+      if (gameState) {
+        gameState.furthestRing = Math.max(gameState.furthestRing ?? 0, sector.ring ?? 0);
+        if (!gameState.history) {
+          gameState.history = { recentSectors: [], recentSurveys: [], recentBeaconVisits: [] };
+        }
+        pushLimited(gameState.history.recentSectors, {
+          id: sectorKey,
+          ring: sector.ring,
+          type: sector.sectorType
+        }, 20);
+        markStateDirty();
+      }
+
+      lastSectorKey = sectorKey;
+      lastSectorRef = sector;
+    }
+
+    if (beaconScanPenalty > 0) {
+      beaconScanPenalty = Math.max(0, beaconScanPenalty - dt);
+    }
+
+    let inBeaconZone = false;
+    if (sector?.beacon) {
+      const dx = ship.x - sector.beacon.x;
+      const dy = ship.y - sector.beacon.y;
+      const dist = Math.hypot(dx, dy);
+      const radius = Number.isFinite(sector.beacon.radius) ? sector.beacon.radius : BEACON.OBSERVER_RADIUS;
+      inBeaconZone = dist <= radius;
+      updateBeaconSignal(dt, inBeaconZone);
+
+      if (inBeaconZone) {
+        if (!wasInBeaconZone) {
+          const now = Date.now();
+          const lastVisit = gameState?.history?.recentBeaconVisits?.slice(-1)[0];
+          const lastTime = Number.isFinite(lastVisit?.at) ? lastVisit.at : 0;
+          const cooldownOk = (now - lastTime) / 1000 >= BEACON.VISIT_COOLDOWN;
+          if (gameState?.beacon) {
+            gameState.beacon.visitCount = (gameState.beacon.visitCount ?? 0) + 1;
+            if (cooldownOk) {
+              applyBeaconExposure(BEACON.RETURN_BONUS);
+            }
+          }
+          if (gameState?.history) {
+            pushLimited(gameState.history.recentBeaconVisits, { id: sectorKey, at: now }, 30);
+          }
+          markStateDirty();
+        }
+
+        if (gameState?.beacon) {
+          const penalty = beaconScanPenalty > 0 ? 0.6 : 1;
+          gameState.beacon.totalObservedSeconds = (gameState.beacon.totalObservedSeconds ?? 0) + dt;
+          applyBeaconExposure(dt * BEACON.OBSERVE_RATE * penalty);
+        }
+      }
+    } else {
+      beaconSignal.strength = 0;
+    }
+
+    wasInBeaconZone = inBeaconZone;
+    wasInActiveMotif = isActiveMotif(beaconSignal.motif);
 
     // --- gravity debug accumulation ---
     ship.debugGravityX = 0;
@@ -1301,11 +1778,20 @@ export function startGame(canvas, ctx, onGameOver) {
 
     const activeStars = activeSectors.flatMap((s) => s.stars);
     for (const activeSector of activeSectors) {
+      if (activeSector.beacon && !activeSector.beaconEntity) {
+        activeSector.beaconEntity = new BeaconRelic(activeSector.beacon.x, activeSector.beacon.y, {
+          size: 190,
+          shimmerPhase: (activeSector.sx + activeSector.sy) * 0.5
+        });
+      }
       if (!activeSector.goalCollected && typeof activeSector.goal.update === "function") {
         activeSector.goal.update(dt);
       }
       if (!activeSector.goalDelivered && typeof activeSector.endZone.update === "function") {
         activeSector.endZone.update(dt);
+      }
+      if (activeSector.beaconEntity && typeof activeSector.beaconEntity.update === "function") {
+        activeSector.beaconEntity.update(dt);
       }
     }
     for (const star of activeStars) {
@@ -1319,6 +1805,7 @@ export function startGame(canvas, ctx, onGameOver) {
     });
 
     integrate(ship, dt);
+    updateGate(dt);
     const shipSpeed = Math.hypot(ship.vx, ship.vy);
     spawnTrailSparks(dt, shipSpeed);
     const dxTravel = ship.x - lastShipX;
@@ -1335,10 +1822,32 @@ export function startGame(canvas, ctx, onGameOver) {
         integrate(asteroid, dt);
       }
     }
-    updateFuelPickups(dt, activeStars);
-    enemiesInRange = updateEnemies(dt, activeStars);
-    handleFuelPickups();
-    handleBulletHits(activeSectors);
+    updateFuelPickups(fuelPickups, activeStars, dt);
+    enemiesInRange = updateEnemies(
+      enemies,
+      ship,
+      dt,
+      activeStars,
+      MINIMAP.RANGE,
+      ENEMY_FIRE_RANGE,
+      ENEMY.FIRE_COOLDOWN,
+      enemyBullets,
+      BULLET.SPEED,
+      ENEMY_BULLET_LIFE,
+      sounds
+    );
+    handleFuelPickups(fuelPickups, ship, SHIP_RADIUS, SCORE_POINTS, addScore, sounds);
+    handleBulletHits(
+      bullets,
+      enemies,
+      activeSectors,
+      SCORE_POINTS,
+      SCORE_CHUNK_MULTIPLIER,
+      addScore,
+      sounds,
+      fuelPickups,
+      particles
+    );
     updateZoom(dt);
     if (lastTrailX === null) {
       lastTrailX = ship.x;
@@ -1379,17 +1888,7 @@ export function startGame(canvas, ctx, onGameOver) {
       const dy = ship.y - star.y;
       const dist = Math.hypot(dx, dy);
       if (dist < star.radius) {
-        triggerShake(SHAKE.HIT);
-        spawnExplosion(ship.x, ship.y, "star");
-        lives -= 1;
-        if (lives <= 0) {
-          shipVisible = false;
-          sounds.play("game_over");
-          endGame();
-          return;
-        }
-        sounds.play("lost_life");
-        queueRespawn();
+        handleLifeLoss("star");
         return;
       }
     }
@@ -1401,18 +1900,7 @@ export function startGame(canvas, ctx, onGameOver) {
           const dy = ship.y - asteroid.y;
           const dist = Math.hypot(dx, dy);
           if (dist < asteroid.radius + SHIP_RADIUS) {
-            triggerShake(SHAKE.HIT);
-            lives -= 1;
-            if (lives <= 0) {
-              spawnExplosion(ship.x, ship.y, "normal");
-              shipVisible = false;
-              sounds.play("game_over");
-              endGame();
-              return;
-            }
-            spawnExplosion(ship.x, ship.y, "normal");
-            sounds.play("lost_life");
-            queueRespawn();
+            handleLifeLoss("normal");
             return;
           }
         }
@@ -1421,30 +1909,25 @@ export function startGame(canvas, ctx, onGameOver) {
 
     if (ship.fuel <= 0 && keys["q"]) {
       keys["q"] = false;
-      lives -= 1;
-      if (lives <= 0) {
-        spawnExplosion(ship.x, ship.y, "normal");
-        shipVisible = false;
-        sounds.play("game_over");
-        endGame();
-        return;
-      }
-      spawnExplosion(ship.x, ship.y, "normal");
-      sounds.play("lost_life");
-      queueRespawn();
+      handleLifeLoss("normal");
       return;
     }
 
-    const wantsFire = keys[" "] || (mouseAimEnabled && mouse.leftDown) || touch.fireId !== null;
+    const wantsFire = !controlsDisabled
+      && (keys[" "] || (mouseAimEnabled && mouse.leftDown) || touch.fireId !== null);
     if (shipVisible && wantsFire && fireCooldown === 0 && fireLockout === 0) {
-      spawnBullet();
+      spawnBullet(bullets, ship, BULLET);
       sounds.play("laser");
+      triggerShake(SHAKE.FIRE, 0.12);
       fireCooldown = BULLET.COOLDOWN;
     }
 
     if (!sector.goalCollected && sector.goal.containsPoint(ship.x, ship.y, SHIP_RADIUS)) {
       sector.goalCollected = true;
       ship.fuel = ship.maxFuel;
+      if (inBeaconZone) {
+        beaconScanPenalty = Math.max(beaconScanPenalty, 10);
+      }
     }
 
     if (!sector.goalDelivered && sector.endZone.containsPoint(ship.x, ship.y, SHIP_RADIUS)) {
@@ -1452,11 +1935,27 @@ export function startGame(canvas, ctx, onGameOver) {
       ship.fuel = ship.maxFuel;
       surveyed += 1;
       scoreMultiplier = 1 + surveyed;
-      addScore(SCORE_POINTS.SURVEY);
+      addScore(SCORE_POINTS.SURVEY, false, false, { x: ship.x, y: ship.y }, "survey");
       queueAlert("Sector surveyed.");
       queueAlert("Fuel tanks refilled!", ALERT.DURATION);
       triggerShake(SHAKE.SURVEY);
       sounds.play("got_survey");
+      const wasSurveyed = ensureSectorMeta(sector)?.surveyComplete;
+      const meta = updateSectorMeta(sector, (entry) => {
+        entry.surveyComplete = true;
+        entry.lastVisitedAt = Date.now();
+      });
+      if (meta?.sectorType === SECTOR_TYPES.SIGNAL_ORIGIN && !wasSurveyed) {
+        applyBeaconExposure(BEACON.SURVEY_BONUS);
+      }
+      if (gameState?.history) {
+        pushLimited(gameState.history.recentSurveys, {
+          id: getSectorKey(sector),
+          ring: sector.ring,
+          count: surveyed
+        }, 30);
+        markStateDirty();
+      }
       console.log("[survey] completed", {
         sector: `${sector.sx},${sector.sy}`,
         surveyed
@@ -1466,6 +1965,8 @@ export function startGame(canvas, ctx, onGameOver) {
         queueAlert("Enemies have been alerted as to your position.", ALERT.DURATION * 2);
       }
     }
+
+    saveStateIfNeeded();
   }
 
 function render() {
@@ -1562,17 +2063,28 @@ function render() {
     for (const star of activeSector.stars) {
       star.draw(ctx);
     }
+    if (activeSector.beaconEntity) {
+      activeSector.beaconEntity.draw(ctx);
+    }
     for (const asteroid of activeSector.asteroids) {
       asteroid.draw(ctx);
     }
   }
-  drawFuelPickups(ctx);
-  drawEnemies(ctx);
-  drawEnemyBullets(ctx);
-  drawBullets(ctx);
-  drawParticles(ctx);
+  drawGate(ctx);
+  drawFuelPickups(ctx, fuelPickups);
+  drawEnemies(ctx, enemies);
+  drawEnemyBullets(ctx, enemyBullets);
+  drawBullets(ctx, bullets);
+  drawParticles(ctx, particles);
   if (shipVisible) {
-    ship.draw(ctx, shipSpeed);
+    if (controlsDisabledTimer > 0) {
+      ctx.save();
+      ctx.globalAlpha = 0.55;
+      ship.draw(ctx, shipSpeed);
+      ctx.restore();
+    } else {
+      ship.draw(ctx, shipSpeed);
+    }
   }
   camera.resetTransform(ctx);
 
@@ -1580,6 +2092,10 @@ function render() {
     drawDebugVectors(ctx, ship);
   }
   drawScreenEffects(ctx, canvas.width, canvas.height);
+  if (controlsDisabledTimer > 0 && shipVisible) {
+    drawControlDisableOverlay(ctx, canvas, camera, controlsDisabledTimer, CALIBRATION_SHIP_RADIUS);
+  }
+  drawScorePopups(ctx, canvas, camera, ship, scorePopups);
   const hudScale = getHudScale(canvas.width, canvas.height);
   ctx.save();
   ctx.scale(hudScale, hudScale);
@@ -1589,8 +2105,9 @@ function render() {
   const controlLabel = touch.isActive
     ? "CTRL: TOUCH + KEYS"
     : (mouseAimEnabled ? "CTRL: MOUSE + KEYS" : "CTRL: KEYS");
-  drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, enemiesInRange, hudW, hudH);
-  drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, hudW, hudH, isCompactHud);
+  const anomalyEffects = getAnomalyEffects(sector, time);
+  drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, enemiesInRange, hudW, hudH, anomalyEffects);
+  drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, hudW, hudH, isCompactHud, anomalyEffects);
   drawFuelGauge(ctx, ship, hudW, hudH, isCompactHud);
   drawStatusHud(
     ctx,
@@ -1604,7 +2121,10 @@ function render() {
     isCompactHud
   );
   drawScoreHud(ctx, score, scoreMultiplier, scorePulse, hudW, hudH, isCompactHud);
-  drawAlerts(ctx, hudW, hudH);
+  if (sector?.sectorType === SECTOR_TYPES.SIGNAL_ORIGIN) {
+    drawBeaconSignalHud(ctx, beaconSignal.strength, hudW, hudH, isCompactHud);
+  }
+  drawAlerts(ctx, alerts, alertClock, hudW, hudH);
   ctx.restore();
   drawMouseReticle(ctx, mouse, canvas.width, canvas.height, mouseAimEnabled);
   drawTouchControls(ctx, touch, canvas.width, canvas.height);
@@ -1612,54 +2132,6 @@ function render() {
 
 function lerp(start, end, t) {
   return start + (end - start) * t;
-}
-
-function drawTrail(ctx, trail, speed = 0) {
-  if (trail.length < 2) {
-    return;
-  }
-
-  const speedRatio = Math.min(1, speed / TRAIL_COLOR.SPEED);
-  const trailR = Math.round(lerp(TRAIL_COLOR.SLOW[0], TRAIL_COLOR.FAST[0], speedRatio));
-  const trailG = Math.round(lerp(TRAIL_COLOR.SLOW[1], TRAIL_COLOR.FAST[1], speedRatio));
-  const trailB = Math.round(lerp(TRAIL_COLOR.SLOW[2], TRAIL_COLOR.FAST[2], speedRatio));
-
-  ctx.save();
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.lineWidth = TRAIL_DISPERSE.BASE_WIDTH;
-  ctx.setLineDash([]);
-  const total = trail.length - 1;
-  for (let i = 1; i < trail.length; i++) {
-    const a = trail[i - 1];
-    const b = trail[i];
-    const t = i / total;
-    const alpha = 0.05 + 0.35 * t;
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.strokeStyle = `rgba(${trailR}, ${trailG}, ${trailB}, ${alpha})`;
-    ctx.stroke();
-  }
-  ctx.restore();
-
-  ctx.save();
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  for (let i = 1; i < trail.length; i++) {
-    const a = trail[i - 1];
-    const b = trail[i];
-    const t = i / (trail.length - 1);
-    const alpha = (0.08 + 0.35 * t) * (0.5 + speedRatio * 0.6);
-    const width = TRAIL_DISPERSE.BASE_WIDTH + t * TRAIL_DISPERSE.SPREAD;
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.lineWidth = width;
-    ctx.strokeStyle = `rgba(${trailR}, ${trailG}, ${trailB}, ${alpha})`;
-    ctx.stroke();
-  }
-  ctx.restore();
 }
 
 function drawDebugVectors(ctx, ship) {
@@ -1761,716 +2233,17 @@ function drawNavHud(ctx, ship, target, label, screenW, screenH) {
   ctx.restore();
 }
 
-function drawFuelGauge(ctx, ship, screenW, screenH, isCompact) {
-  const edge = isCompact ? 12 : 20;
-  const panelW = Math.min(isCompact ? 260 : 320, screenW - edge * 2);
-  const panelH = isCompact ? 70 : 78;
-  const x = edge;
-  const y = screenH - panelH - (isCompact ? 10 : 16);
-  const barW = panelW - 24;
-  const barH = isCompact ? 9 : 10;
-  const barX = x + 12;
-  const barY = y + panelH - (isCompact ? 16 : 18);
-  const ratio = ship.maxFuel > 0 ? ship.fuel / ship.maxFuel : 0;
-  const fillWidth = Math.max(0, Math.min(1, ratio)) * barW;
-  const depleted = ship.fuel <= 0;
-  const fuelValue = Math.max(0, ship.fuel).toFixed(1);
-
-  ctx.save();
-  const panelGrad = ctx.createLinearGradient(x, y, x + panelW, y + panelH);
-  panelGrad.addColorStop(0, HUD_COLORS.PANEL_START);
-  panelGrad.addColorStop(1, HUD_COLORS.PANEL_END);
-
-  ctx.beginPath();
-  ctx.moveTo(x + 16, y);
-  ctx.lineTo(x + panelW, y);
-  ctx.lineTo(x + panelW - 12, y + panelH);
-  ctx.lineTo(x, y + panelH);
-  ctx.closePath();
-  ctx.fillStyle = panelGrad;
-  ctx.fill();
-  ctx.strokeStyle = HUD_COLORS.PANEL_STROKE;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
-  ctx.fillRect(barX - 2, barY - 2, barW + 4, barH + 4);
-  ctx.strokeStyle = HUD_COLORS.PANEL_TICK;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(barX, barY, barW, barH);
-
-  const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
-  grad.addColorStop(0, "rgba(200, 110, 110, 0.9)");
-  grad.addColorStop(0.55, HUD_COLORS.WARM);
-  grad.addColorStop(1, "rgba(120, 190, 175, 0.9)");
-  ctx.fillStyle = depleted ? "rgba(200, 110, 110, 0.9)" : grad;
-  ctx.fillRect(barX, barY, fillWidth, barH);
-
-  ctx.fillStyle = HUD_COLORS.PANEL_MUTED;
-  ctx.font = `${isCompact ? 11 : 12}px ${HUD_FONT}`;
-  ctx.textAlign = "left";
-  ctx.fillText("FUEL", barX + 20, y + 18);
-  ctx.textAlign = "right";
-  ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
-  ctx.fillText(fuelValue, x + panelW - 12, y + 18);
-
-  if (depleted) {
-    ctx.fillStyle = HUD_COLORS.WARNING;
-    ctx.font = `${isCompact ? 10 : 11}px ${HUD_FONT}`;
-    ctx.textAlign = "right";
-    ctx.fillText("Press Q to restart", x + panelW - 12, y + panelH - 8);
-  }
-  ctx.restore();
-}
-
-function drawStatusHud(ctx, ship, lives, surveyed, timeSpent, screenW, screenH, controlLabel = "", isCompact = false) {
-  const speed = Math.hypot(ship.vx, ship.vy);
-  let headingDeg = (ship.heading * 180) / Math.PI;
-  headingDeg = ((headingDeg % 360) + 360) % 360;
-  const edge = isCompact ? 12 : 18;
-  const labels = isCompact
-    ? {
-      lives: "LIV",
-      surveyed: "SURV",
-      time: "TIME",
-      speed: "SPD",
-      heading: "HDG"
-    }
-    : {
-      lives: "LIVES",
-      surveyed: "SURVEYED",
-      time: "TIME",
-      speed: "SPEED",
-      heading: "HEADING"
-    };
-  const lines = [
-    { label: labels.lives, value: lives },
-    { label: labels.surveyed, value: surveyed },
-    { label: labels.time, value: `${timeSpent.toFixed(1)}s` },
-    { label: labels.speed, value: speed.toFixed(1) },
-    { label: labels.heading, value: `${headingDeg.toFixed(0)}deg` }
-  ];
-  const showControls = !isCompact && controlLabel;
-  const lineH = isCompact ? 16 : 18;
-  const basePad = isCompact ? 12 : 16;
-  const panelW = Math.min(isCompact ? 240 : 280, screenW - edge * 2);
-  const panelH = basePad * 2 + lineH * lines.length + (showControls ? lineH : 0);
-  const x = edge;
-  const y = edge;
-
-  ctx.save();
-  const panelGrad = ctx.createLinearGradient(x, y, x + panelW, y + panelH);
-  panelGrad.addColorStop(0, HUD_COLORS.PANEL_START);
-  panelGrad.addColorStop(1, HUD_COLORS.PANEL_END);
-
-  ctx.beginPath();
-  ctx.moveTo(x + 14, y);
-  ctx.lineTo(x + panelW, y);
-  ctx.lineTo(x + panelW - 12, y + panelH);
-  ctx.lineTo(x, y + panelH);
-  ctx.closePath();
-  ctx.fillStyle = panelGrad;
-  ctx.fill();
-  ctx.strokeStyle = HUD_COLORS.PANEL_STROKE;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  ctx.strokeStyle = HUD_COLORS.PANEL_TICK;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(x + 10, y + 8);
-  ctx.lineTo(x + panelW - 10, y + 8);
-  ctx.stroke();
-
-  const labelX = x + 16;
-  const valueX = x + panelW - 14;
-  let cursorY = y + basePad + lineH - 4;
-  for (const line of lines) {
-    ctx.textAlign = "left";
-    ctx.fillStyle = HUD_COLORS.PANEL_MUTED;
-    ctx.font = `${isCompact ? 11 : 12}px ${HUD_FONT}`;
-    ctx.fillText(line.label, labelX, cursorY);
-    ctx.textAlign = "right";
-    ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
-    ctx.font = `${isCompact ? 14 : 16}px ${HUD_FONT}`;
-    ctx.fillText(line.value, valueX, cursorY);
-    cursorY += lineH;
-  }
-
-  if (showControls) {
-    ctx.textAlign = "left";
-    ctx.fillStyle = HUD_COLORS.PANEL_MUTED;
-    ctx.font = `${isCompact ? 10 : 11}px ${HUD_FONT}`;
-    ctx.fillText(controlLabel, labelX, cursorY + 2);
-  }
-  ctx.restore();
-}
-
-function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH, isCompact) {
-  const displayScore = Math.max(0, Math.floor(score));
-  const scoreText = displayScore.toString().padStart(7, "0");
-  const edge = isCompact ? 12 : 18;
-  const panelW = Math.min(isCompact ? 260 : 320, screenW - edge * 2);
-  const panelH = isCompact ? 70 : 78;
-  const x = screenW - panelW - edge;
-  const y = screenH - panelH - (isCompact ? 10 : 16);
-  const labelX = x + 24;
-  const labelY = y + (isCompact ? 16 : 18);
-  const scoreFont = isCompact ? 24 : 28;
-  const labelFont = isCompact ? 11 : 12;
-  const badgeFont = isCompact ? 14 : 16;
-  const badgeLabelFont = isCompact ? 9 : 10;
-  const time = performance.now();
-  const ringPulse = 0.4 + 0.6 * Math.abs(Math.sin(time / 220));
-  const ringRatio = Math.min(1, (multiplier - 1) / 6);
-
-  ctx.save();
-
-  const panelGrad = ctx.createLinearGradient(x, y, x + panelW, y + panelH);
-  panelGrad.addColorStop(0, HUD_COLORS.PANEL_START);
-  panelGrad.addColorStop(1, HUD_COLORS.PANEL_END);
-
-  ctx.beginPath();
-  ctx.moveTo(x + 24, y);
-  ctx.lineTo(x + panelW, y);
-  ctx.lineTo(x + panelW - 16, y + panelH);
-  ctx.lineTo(x, y + panelH);
-  ctx.closePath();
-  ctx.fillStyle = panelGrad;
-  ctx.fill();
-  ctx.strokeStyle = HUD_COLORS.PANEL_STROKE;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  ctx.strokeStyle = HUD_COLORS.PANEL_TICK;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(x + 10, y + 8);
-  ctx.lineTo(x + panelW - 10, y + 8);
-  ctx.stroke();
-
-  ctx.textAlign = "left";
-  ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
-  ctx.font = `${labelFont}px ${HUD_FONT}`;
-  ctx.fillText("SCORE", labelX, labelY);
-
-  const scoreX = labelX;
-  const scoreY = y + (isCompact ? 50 : 54);
-  const pulseT = Math.min(1, pulse / 1.2);
-  const pulseEase = Math.pow(pulseT, 0.75);
-  const pulseScale = 1 + pulseEase * 0.26;
-  const glow = 14 + pulseEase * 60 + pulse * 12;
-  if (pulseT > 0) {
-    const barW = 220 + pulseEase * 180;
-    const barH = 14 + pulseEase * 10;
-    const barX = scoreX - 16;
-    const barY = scoreY - 30 - pulseEase * 14;
-    const barGrad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
-    barGrad.addColorStop(0, "rgba(0, 0, 0, 0)");
-    barGrad.addColorStop(0.5, `rgba(120, 200, 190, ${0.7 * pulseEase + 0.25})`);
-    barGrad.addColorStop(1, "rgba(0, 0, 0, 0)");
-    ctx.fillStyle = barGrad;
-    ctx.fillRect(barX, barY, barW, barH);
-
-    const bar2W = 140 + pulseEase * 120;
-    const bar2H = 8 + pulseEase * 6;
-    const bar2X = scoreX - 6;
-    const bar2Y = scoreY + 8 + pulseEase * 6;
-    const bar2Grad = ctx.createLinearGradient(bar2X, 0, bar2X + bar2W, 0);
-    bar2Grad.addColorStop(0, "rgba(0, 0, 0, 0)");
-    bar2Grad.addColorStop(0.5, `rgba(170, 210, 205, ${0.55 * pulseEase + 0.2})`);
-    bar2Grad.addColorStop(1, "rgba(0, 0, 0, 0)");
-    ctx.fillStyle = bar2Grad;
-    ctx.fillRect(bar2X, bar2Y, bar2W, bar2H);
-  }
-
-  ctx.font = `bold ${scoreFont}px ${HUD_FONT}`;
-  const scoreMetrics = ctx.measureText(scoreText);
-  const platePadX = isCompact ? 18 : 22;
-  const platePadY = isCompact ? 8 : 10;
-  const plateW = scoreMetrics.width + platePadX * 2;
-  const plateH = scoreFont + platePadY * 2;
-  const plateX = scoreX - platePadX;
-  const plateY = scoreY - scoreFont - platePadY + 4;
-  const plateGrad = ctx.createLinearGradient(plateX, plateY, plateX + plateW, plateY + plateH);
-  plateGrad.addColorStop(0, "rgba(6, 10, 12, 0.92)");
-  plateGrad.addColorStop(1, "rgba(12, 18, 22, 0.88)");
-  ctx.fillStyle = plateGrad;
-  ctx.fillRect(plateX, plateY, plateW, plateH);
-  ctx.strokeStyle = "rgba(220, 235, 235, 0.3)";
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(plateX, plateY, plateW, plateH);
-
-  ctx.save();
-  ctx.shadowColor = "rgba(255, 255, 255, 0.9)";
-  ctx.shadowBlur = glow + 10;
-  ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
-  ctx.translate(scoreX, scoreY);
-  ctx.scale(pulseScale, pulseScale);
-  ctx.fillText(scoreText, 0, 0);
-  ctx.restore();
-
-  ctx.save();
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = "rgba(255, 255, 255, 1)";
-  ctx.translate(scoreX, scoreY);
-  ctx.scale(pulseScale, pulseScale);
-  ctx.fillText(scoreText, 0, 0);
-  ctx.restore();
-  ctx.strokeStyle = "rgba(0, 0, 0, 0.85)";
-  ctx.lineWidth = 3.5;
-  ctx.save();
-  ctx.translate(scoreX, scoreY);
-  ctx.scale(pulseScale, pulseScale);
-  ctx.strokeText(scoreText, 0, 0);
-  ctx.restore();
-
-  const badgeR = isCompact ? 13 : 15;
-  const badgeX = x + panelW - (isCompact ? 34 : 38);
-  const badgeY = y + panelH / 2 + 6;
-  const badgeGrad = ctx.createRadialGradient(
-    badgeX - 4,
-    badgeY - 4,
-    4,
-    badgeX,
-    badgeY,
-    badgeR
-  );
-  badgeGrad.addColorStop(0, "rgba(220, 200, 170, 0.95)");
-  badgeGrad.addColorStop(1, "rgba(170, 130, 100, 0.95)");
-
-  ctx.beginPath();
-  ctx.arc(badgeX, badgeY, badgeR, 0, Math.PI * 2);
-  ctx.fillStyle = badgeGrad;
-  ctx.fill();
-  ctx.strokeStyle = "rgba(230, 235, 235, 0.55)";
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  ctx.strokeStyle = `rgba(190, 200, 190, ${0.35 + ringPulse * 0.5})`;
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.arc(
-    badgeX,
-    badgeY,
-    badgeR + 6,
-    -Math.PI / 2,
-    -Math.PI / 2 + Math.PI * 2 * ringRatio
-  );
-  ctx.stroke();
-
-  ctx.textAlign = "center";
-  ctx.fillStyle = "rgba(8, 12, 16, 0.9)";
-  ctx.font = `${badgeFont}px ${HUD_FONT}`;
-  ctx.fillText(`x${multiplier}`, badgeX, badgeY + 6);
-  ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
-  ctx.font = `${badgeLabelFont}px ${HUD_FONT}`;
-  ctx.fillText("MULTI", badgeX, labelY);
-
-  ctx.restore();
-}
-
 function normalizeAngle(angle) {
   return ((angle + Math.PI) % (Math.PI * 2)) - Math.PI;
 }
 
-function drawCompassHud(ctx, ship, activeSectors, enemies, fuelPickups, screenW, screenH) {
-  if (!activeSectors || activeSectors.length === 0) {
-    return;
-  }
-
-  const range = MINIMAP.RANGE;
-  const width = Math.min(COMPASS.WIDTH, screenW - 100);
-  if (width < 200) {
-    return;
-  }
-  const height = COMPASS.HEIGHT;
-  const centerX = screenW / 2;
-  const centerY = screenH - COMPASS.Y_OFFSET;
-  const halfWidth = width / 2;
-  const halfFov = COMPASS.FOV / 2;
-  const top = centerY - height / 2;
-  const bottom = centerY + height / 2;
-  const notch = 18;
-
-  ctx.save();
-  const panelGrad = ctx.createLinearGradient(centerX - halfWidth, top, centerX + halfWidth, bottom);
-  panelGrad.addColorStop(0, HUD_COLORS.PANEL_START);
-  panelGrad.addColorStop(1, HUD_COLORS.PANEL_END);
-
-  ctx.beginPath();
-  ctx.moveTo(centerX - halfWidth + notch, top);
-  ctx.lineTo(centerX + halfWidth, top);
-  ctx.lineTo(centerX + halfWidth - notch, bottom);
-  ctx.lineTo(centerX - halfWidth, bottom);
-  ctx.closePath();
-  ctx.fillStyle = panelGrad;
-  ctx.fill();
-  ctx.strokeStyle = HUD_COLORS.PANEL_STROKE;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  ctx.strokeStyle = HUD_COLORS.PANEL_TICK;
-  ctx.lineWidth = 1;
-  for (let deg = -90; deg <= 90; deg += COMPASS.TICK_DEG) {
-    const rel = (deg * Math.PI) / 180;
-    const x = centerX + (rel / halfFov) * halfWidth;
-    const major = deg % 30 === 0;
-    const len = major ? 12 : 7;
-    ctx.beginPath();
-    ctx.moveTo(x, centerY - len / 2);
-    ctx.lineTo(x, centerY + len / 2);
-    ctx.stroke();
-  }
-
-  ctx.strokeStyle = HUD_COLORS.ACCENT;
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(centerX, top + 6);
-  ctx.lineTo(centerX, bottom - 6);
-  ctx.stroke();
-  ctx.restore();
-
-  const laneFuel = centerY - 24;
-  const laneEnd = centerY - 12;
-  const laneEnemy = centerY + 2;
-  const laneStar = centerY + 14;
-  const laneAsteroid = centerY + 22;
-
-  function drawMark(tx, ty, laneY, baseAlpha, drawFn) {
-    const dx = tx - ship.x;
-    const dy = ty - ship.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist > range) {
-      return;
-    }
-    const rel = normalizeAngle(Math.atan2(dx, -dy) - ship.heading);
-    if (Math.abs(rel) > halfFov) {
-      return;
-    }
-    const x = centerX + (rel / halfFov) * halfWidth;
-    const falloff = 0.4 + 0.6 * (1 - dist / range);
-    const alpha = baseAlpha * Math.max(0, Math.min(1, falloff));
-    drawFn(x, laneY, alpha);
-  }
-
-  function drawEnemyMark(x, y, alpha) {
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.translate(x, y);
-    ctx.shadowColor = "rgba(200, 110, 110, 0.8)";
-    ctx.shadowBlur = 10;
-    ctx.fillStyle = "rgba(200, 110, 110, 0.95)";
-    ctx.beginPath();
-    ctx.moveTo(0, -8);
-    ctx.lineTo(7, 7);
-    ctx.lineTo(-7, 7);
-    ctx.closePath();
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.strokeStyle = "rgba(230, 235, 235, 0.5)";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  function drawStarMark(x, y, alpha, color) {
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.translate(x, y);
-    ctx.rotate(Math.PI / 4);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(-3, -3, 6, 6);
-    ctx.restore();
-  }
-
-  function drawAsteroidMark(x, y, alpha) {
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.translate(x, y);
-    ctx.strokeStyle = HUD_COLORS.ASTEROID;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(-3, 0);
-    ctx.lineTo(3, 0);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  function drawEndZoneMark(x, y, alpha) {
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.translate(x, y);
-    ctx.fillStyle = HUD_COLORS.ACCENT;
-    ctx.strokeStyle = "rgba(40, 90, 80, 0.9)";
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.rect(-5, -5, 10, 10);
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  function drawFuelMark(x, y, alpha) {
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.translate(x, y);
-    ctx.fillStyle = HUD_COLORS.WARM;
-    ctx.strokeStyle = "rgba(230, 235, 235, 0.6)";
-    ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    ctx.moveTo(-4, -6);
-    ctx.lineTo(4, -6);
-    ctx.arc(4, 0, 6, -Math.PI / 2, Math.PI / 2);
-    ctx.lineTo(-4, 6);
-    ctx.arc(-4, 0, 6, Math.PI / 2, -Math.PI / 2);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.strokeStyle = "rgba(90, 70, 50, 0.8)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(-2, -1);
-    ctx.lineTo(2, -1);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  for (const enemy of enemies) {
-    drawMark(enemy.x, enemy.y, laneEnemy, 1, drawEnemyMark);
-  }
-
-  for (const sector of activeSectors) {
-    if (!sector.goalDelivered && sector.endZone) {
-      const endZone = sector.endZone;
-      const ex = endZone.x + endZone.width / 2;
-      const ey = endZone.y + endZone.height / 2;
-      drawMark(ex, ey, laneEnd, 0.95, drawEndZoneMark);
-    }
-  }
-
-  for (const fuel of fuelPickups) {
-    drawMark(fuel.x, fuel.y, laneFuel, 0.95, drawFuelMark);
-  }
-
-  for (const sector of activeSectors) {
-    for (const star of sector.stars) {
-      const color = star.minimapColor ?? star.bodyColor ?? "white";
-      drawMark(star.x, star.y, laneStar, 0.55, (x, y, alpha) => {
-        drawStarMark(x, y, alpha, color);
-      });
-    }
-  }
-
-  for (const sector of activeSectors) {
-    for (const asteroid of sector.asteroids) {
-      drawMark(asteroid.x, asteroid.y, laneAsteroid, 0.25, drawAsteroidMark);
-    }
-  }
+function clampValue(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
-function getNearestScanTarget(ship, activeSectors) {
-  let nearest = null;
-  for (const sector of activeSectors) {
-    if (sector.goalDelivered || !sector.endZone) {
-      continue;
-    }
-    const ex = sector.endZone.x + sector.endZone.width / 2;
-    const ey = sector.endZone.y + sector.endZone.height / 2;
-    const dx = ex - ship.x;
-    const dy = ey - ship.y;
-    const dist2 = dx * dx + dy * dy;
-    if (!nearest || dist2 < nearest.dist2) {
-      nearest = { x: ex, y: ey, dist2 };
-    }
-  }
-  return nearest;
-}
-
-function drawScanPulse(ctx, ship, activeSectors, timeMs, viewRadius) {
-  if (!activeSectors || activeSectors.length === 0) {
-    return;
-  }
-  const target = getNearestScanTarget(ship, activeSectors);
-  if (!target) {
-    return;
-  }
-  const dist = Math.hypot(target.x - ship.x, target.y - ship.y);
-  if (dist > viewRadius + SCAN_PULSE.RADIUS_MAX) {
-    return;
-  }
-
-  const t = (timeMs % SCAN_PULSE.PERIOD) / SCAN_PULSE.PERIOD;
-  const radius = SCAN_PULSE.RADIUS_MIN
-    + (SCAN_PULSE.RADIUS_MAX - SCAN_PULSE.RADIUS_MIN) * t;
-  const alpha = 0.5 * (1 - t);
-
-  ctx.save();
-  ctx.globalCompositeOperation = "lighter";
-  ctx.strokeStyle = `rgba(120, 200, 190, ${alpha})`;
-  ctx.lineWidth = SCAN_PULSE.LINE_WIDTH;
-  ctx.beginPath();
-  ctx.arc(target.x, target.y, radius, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.restore();
-}
-
-function drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, enemiesInRange, screenW, screenH) {
-  if (!activeSectors || activeSectors.length === 0) {
-    return;
-  }
-
-  const scanTargets = [];
-  for (const sector of activeSectors) {
-    if (!sector.goalDelivered && sector.endZone) {
-      const ex = sector.endZone.x + sector.endZone.width / 2;
-      const ey = sector.endZone.y + sector.endZone.height / 2;
-      const dx = ex - ship.x;
-      const dy = ey - ship.y;
-      scanTargets.push({ x: ex, y: ey, dist2: dx * dx + dy * dy });
-    }
-  }
-  scanTargets.sort((a, b) => a.dist2 - b.dist2);
-
-  const hasFuel = fuelPickups && fuelPickups.length > 0;
-  const hasEnemies = enemiesInRange && enemiesInRange.length > 0;
-  if (scanTargets.length === 0 && !hasFuel && !hasEnemies) {
-    return;
-  }
-
-  const centerX = screenW / 2;
-  const centerY = screenH / 2;
-  const scanColor = HUD_COLORS.ACCENT;
-  const scanGlow = HUD_COLORS.ACCENT_GLOW;
-  const fuelColor = HUD_COLORS.PANEL_TEXT;
-  const dangerColor = HUD_COLORS.ENEMY;
-  const dangerGlow = "rgba(255, 90, 90, 0.9)";
-
-  function drawDot(angle, size, alpha, color, glow) {
-    const x = centerX + Math.cos(angle) * BEARING.RADIUS;
-    const y = centerY + Math.sin(angle) * BEARING.RADIUS;
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = color;
-    if (glow) {
-      ctx.shadowColor = glow;
-      ctx.shadowBlur = 10;
-    }
-    ctx.beginPath();
-    ctx.arc(x, y, size, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  function drawChevronPair(angle, alpha, scale = 1, phase = 0, style = null) {
-    const time = performance.now();
-    const pulseBase = style?.pulseBase ?? 0.85;
-    const pulseRange = style?.pulseRange ?? 0.15;
-    const pulseSpeed = style?.pulseSpeed ?? BEARING.PULSE_SPEED;
-    const driftSpeed = style?.driftSpeed ?? BEARING.DRIFT_SPEED;
-    const driftAmp = style?.driftAmp ?? BEARING.DRIFT_AMPLITUDE;
-    let pulse = pulseBase + pulseRange * Math.sin(time * pulseSpeed + phase);
-    if (style?.flickerSpeed) {
-      pulse *= 0.75 + 0.25 * Math.sin(time * style.flickerSpeed + phase * 1.7);
-    }
-    const drift = Math.sin(time * driftSpeed + phase) * driftAmp;
-    const radius = BEARING.RADIUS + drift;
-    const x = centerX + Math.cos(angle) * radius;
-    const y = centerY + Math.sin(angle) * radius;
-    const len = BEARING.CHEVRON_LENGTH * scale;
-    const width = BEARING.CHEVRON_WIDTH * scale;
-    const gap = BEARING.CHEVRON_GAP * scale;
-
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(angle);
-    ctx.globalAlpha = alpha * pulse;
-    ctx.strokeStyle = style?.color ?? scanColor;
-    ctx.lineWidth = style?.lineWidth ?? 2;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.shadowColor = style?.glow ?? scanGlow;
-    ctx.shadowBlur = style?.glowBlur ?? 8;
-
-    const drawChevron = (offset) => {
-      ctx.beginPath();
-      ctx.moveTo(-len + offset, -width);
-      ctx.lineTo(offset, 0);
-      ctx.lineTo(-len + offset, width);
-      ctx.stroke();
-    };
-
-    drawChevron(0);
-    drawChevron(-gap);
-    ctx.restore();
-  }
-
-  const scanStyle = {
-    color: scanColor,
-    glow: scanGlow,
-    lineWidth: 2,
-    glowBlur: 8,
-    pulseBase: 0.85,
-    pulseRange: 0.15,
-    pulseSpeed: BEARING.PULSE_SPEED,
-    driftSpeed: BEARING.DRIFT_SPEED,
-    driftAmp: BEARING.DRIFT_AMPLITUDE
-  };
-  const dangerStyle = {
-    color: dangerColor,
-    glow: dangerGlow,
-    lineWidth: 2.6,
-    glowBlur: 12,
-    pulseBase: 0.7,
-    pulseRange: 0.4,
-    pulseSpeed: BEARING.DANGER_PULSE_SPEED,
-    flickerSpeed: BEARING.DANGER_FLICKER_SPEED,
-    driftSpeed: BEARING.DANGER_DRIFT_SPEED,
-    driftAmp: BEARING.DRIFT_AMPLITUDE * 1.4
-  };
-
-  if (scanTargets.length > 0) {
-    const primary = scanTargets[0];
-    const angle = Math.atan2(primary.y - ship.y, primary.x - ship.x);
-    drawChevronPair(angle, BEARING.SCAN_PRIMARY_ALPHA, 1, 0, scanStyle);
-  }
-  if (scanTargets.length > 1) {
-    const secondary = scanTargets[1];
-    const angle = Math.atan2(secondary.y - ship.y, secondary.x - ship.x);
-    drawChevronPair(angle, BEARING.SCAN_SECONDARY_ALPHA, 0.85, Math.PI / 2, scanStyle);
-  }
-
-  if (hasEnemies) {
-    enemiesInRange.forEach((enemy, index) => {
-      const dx = enemy.x - ship.x;
-      const dy = enemy.y - ship.y;
-      const dist = Math.hypot(dx, dy);
-      const distScale = 0.5 + 0.5 * (1 - Math.min(1, dist / MINIMAP.RANGE));
-      const angle = Math.atan2(dy, dx);
-      const phase = index * (Math.PI / 3);
-      drawChevronPair(angle, BEARING.DANGER_ALPHA * distScale, 1.05, phase, dangerStyle);
-    });
-  }
-
-  if (hasFuel) {
-    const nearestFuel = fuelPickups
-      .map((fuel) => {
-        const dx = fuel.x - ship.x;
-        const dy = fuel.y - ship.y;
-        return {
-          angle: Math.atan2(dy, dx),
-          dist2: dx * dx + dy * dy
-        };
-      })
-      .sort((a, b) => a.dist2 - b.dist2)
-      .slice(0, BEARING.FUEL_MAX_DOTS);
-
-    for (const fuel of nearestFuel) {
-      drawDot(fuel.angle, BEARING.FUEL_SIZE, BEARING.FUEL_ALPHA, fuelColor);
-    }
-  }
+function lerpAngle(from, to, t) {
+  const delta = normalizeAngle(to - from);
+  return from + delta * t;
 }
 
 function drawMouseReticle(ctx, mouse, screenW, screenH, active) {
@@ -2540,540 +2313,6 @@ function drawTouchControls(ctx, touch, screenW, screenH) {
   ctx.arc(fireX, fireY, fireRadius, 0, Math.PI * 2);
   ctx.stroke();
   ctx.restore();
-}
-
-function drawBackgroundEvents(ctx, events, clock, ship, screenW, screenH) {
-  if (!events || events.length === 0) {
-    return;
-  }
-
-  const fadeIn = 0.18;
-  const fadeOut = 0.18;
-
-  for (const evt of events) {
-    const elapsed = clock - evt.start;
-    const t = Math.max(0, Math.min(1, elapsed / evt.duration));
-    let alpha = 1;
-    if (t < fadeIn) {
-      alpha = t / fadeIn;
-    } else if (t > 1 - fadeOut) {
-      alpha = (1 - t) / fadeOut;
-    }
-
-    if (alpha <= 0) {
-      continue;
-    }
-
-    const driftX = evt.driftX * elapsed;
-    const driftY = evt.driftY * elapsed;
-    const screenX = screenW / 2 + (evt.worldX - ship.x) * evt.parallax + driftX;
-    const screenY = screenH / 2 + (evt.worldY - ship.y) * evt.parallax + driftY;
-    const wobble = Math.sin((clock + evt.worldX) * 0.25) * 0.15;
-    const hueShift = 0.85 + 0.3 * Math.sin((clock + evt.worldY) * 0.2);
-    const swapPalette = t > 0.5;
-    const [colorA, colorB, colorC] = swapPalette
-      ? [evt.colors[1], evt.colors[2], evt.colors[0]]
-      : evt.colors;
-
-    if (evt.type === "quasar") {
-      ctx.save();
-      ctx.globalAlpha = alpha * 0.6;
-      ctx.translate(screenX, screenY);
-      ctx.rotate(evt.angle + wobble);
-      const beamGrad = ctx.createLinearGradient(0, 0, evt.length, 0);
-      beamGrad.addColorStop(0, rgba(colorA, 0, hueShift));
-      beamGrad.addColorStop(0.5, rgba(colorB, 0.85, hueShift));
-      beamGrad.addColorStop(1, rgba(colorA, 0, hueShift));
-      ctx.strokeStyle = beamGrad;
-      ctx.lineWidth = evt.width;
-      ctx.beginPath();
-      ctx.moveTo(-evt.length * 0.1, 0);
-      ctx.lineTo(evt.length, 0);
-      ctx.stroke();
-      ctx.globalCompositeOperation = "lighter";
-      ctx.fillStyle = rgba(colorB, 0.55, hueShift);
-      ctx.beginPath();
-      ctx.arc(0, 0, 10, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-    } else if (evt.type === "supernova") {
-      const radius = evt.radius + (evt.maxRadius - evt.radius) * t;
-      ctx.save();
-      ctx.globalCompositeOperation = "lighter";
-      ctx.globalAlpha = alpha * 0.6;
-      const grad = ctx.createRadialGradient(screenX, screenY, 0, screenX, screenY, radius);
-      grad.addColorStop(0, rgba(colorA, 0.85, 1.1 * hueShift));
-      grad.addColorStop(0.45, rgba(colorB, 0.55, hueShift));
-      grad.addColorStop(1, rgba(colorC, 0, hueShift));
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(screenX, screenY, radius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-    } else if (evt.type === "nebulaBurst") {
-      const radius = evt.radius * (0.8 + t * 0.6);
-      ctx.save();
-      ctx.globalCompositeOperation = "lighter";
-      ctx.globalAlpha = alpha * 0.5;
-      ctx.translate(screenX, screenY);
-      ctx.rotate(evt.rotation + t * 0.8 + wobble);
-      ctx.strokeStyle = rgba(colorA, 0.6, hueShift);
-      ctx.lineWidth = 8;
-      ctx.beginPath();
-      ctx.arc(0, 0, radius, -Math.PI / 3, Math.PI / 2);
-      ctx.stroke();
-      ctx.strokeStyle = rgba(colorB, 0.45, hueShift);
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.arc(0, 0, radius * 0.7, Math.PI / 2, Math.PI * 1.1);
-      ctx.stroke();
-      ctx.restore();
-    } else if (evt.type === "meteor") {
-      const travel = evt.travel * t;
-      const dirX = Math.cos(evt.angle);
-      const dirY = Math.sin(evt.angle);
-      ctx.save();
-      ctx.globalAlpha = alpha * 0.55;
-      for (let i = 0; i < evt.count; i++) {
-        const offset = (i - (evt.count - 1) / 2) * 18;
-        const sx = screenX + dirX * travel + -dirY * offset;
-        const sy = screenY + dirY * travel + dirX * offset;
-        const ex = sx + dirX * evt.length;
-        const ey = sy + dirY * evt.length;
-        const streak = ctx.createLinearGradient(sx, sy, ex, ey);
-        streak.addColorStop(0, rgba(colorA, 0, hueShift));
-        streak.addColorStop(0.6, rgba(colorB, 0.8, hueShift));
-        streak.addColorStop(1, rgba(colorA, 0, hueShift));
-        ctx.strokeStyle = streak;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(sx, sy);
-        ctx.lineTo(ex, ey);
-        ctx.stroke();
-      }
-      ctx.restore();
-    } else if (evt.type === "warp") {
-      const radius = evt.radius + (evt.maxRadius - evt.radius) * t;
-      ctx.save();
-      ctx.globalCompositeOperation = "lighter";
-      ctx.globalAlpha = alpha * 0.4;
-      ctx.strokeStyle = rgba(colorA, 0.7, hueShift);
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(screenX, screenY, radius, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.strokeStyle = rgba(colorB, 0.4, hueShift);
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(screenX, screenY, radius * 0.7, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-    } else if (evt.type === "neonRibbon") {
-      const wave = Math.sin(clock * 0.35 + evt.phase) * evt.bend;
-      const wave2 = Math.cos(clock * 0.25 + evt.phase) * evt.bend * 0.7;
-      ctx.save();
-      ctx.globalCompositeOperation = "lighter";
-      ctx.globalAlpha = alpha * 0.5;
-      ctx.translate(screenX, screenY);
-      ctx.rotate(evt.angle + wobble * 0.7);
-      const grad = ctx.createLinearGradient(-evt.length / 2, 0, evt.length / 2, 0);
-      grad.addColorStop(0, rgba(colorA, 0, hueShift));
-      grad.addColorStop(0.45, rgba(colorB, 0.9, hueShift));
-      grad.addColorStop(1, rgba(colorC, 0, hueShift));
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = evt.width;
-      ctx.lineCap = "round";
-      ctx.beginPath();
-      ctx.moveTo(-evt.length / 2, 0);
-      ctx.bezierCurveTo(-evt.length / 6, wave, evt.length / 6, wave2, evt.length / 2, 0);
-      ctx.stroke();
-
-      ctx.globalAlpha = alpha * 0.25;
-      ctx.strokeStyle = rgba(colorB, 0.6, hueShift);
-      ctx.lineWidth = evt.width * 2.1;
-      ctx.beginPath();
-      ctx.moveTo(-evt.length / 2, 0);
-      ctx.bezierCurveTo(-evt.length / 6, wave, evt.length / 6, wave2, evt.length / 2, 0);
-      ctx.stroke();
-      ctx.restore();
-    } else if (evt.type === "jellySlab") {
-      const pulse = 0.92 + 0.08 * Math.sin(clock * 0.25 + evt.phase);
-      const width = evt.width * pulse;
-      const height = evt.height * (0.9 + 0.1 * Math.cos(clock * 0.28 + evt.phase));
-      ctx.save();
-      ctx.globalCompositeOperation = "lighter";
-      ctx.globalAlpha = alpha * 0.45;
-      ctx.translate(screenX, screenY);
-      ctx.rotate(evt.rotation + wobble * 0.4);
-      ctx.save();
-      ctx.scale(1, height / width);
-      const radius = width / 2;
-      const grad = ctx.createRadialGradient(0, 0, radius * 0.2, 0, 0, radius);
-      grad.addColorStop(0, rgba(colorA, 0.6, hueShift));
-      grad.addColorStop(0.6, rgba(colorB, 0.35, hueShift));
-      grad.addColorStop(1, rgba(colorC, 0, hueShift));
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(0, 0, radius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-
-      ctx.globalAlpha = alpha * 0.32;
-      ctx.strokeStyle = rgba(colorB, 0.8, hueShift);
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(-width * 0.35, -height * 0.12);
-      ctx.quadraticCurveTo(0, height * 0.05, width * 0.35, height * 0.12);
-      ctx.stroke();
-      ctx.restore();
-    } else if (evt.type === "chromaEddy") {
-      const spin = evt.spin * (0.7 + 0.3 * Math.sin(clock * 0.25 + evt.phase));
-      const baseAngle = t * Math.PI * 2 * spin + evt.phase;
-      ctx.save();
-      ctx.globalCompositeOperation = "lighter";
-      ctx.translate(screenX, screenY);
-      for (let i = 0; i < evt.orbCount; i++) {
-        const angle = baseAngle + (i * Math.PI * 2) / evt.orbCount;
-        const dist = evt.radius * (0.6 + 0.4 * Math.sin(t * Math.PI * 2 + i));
-        const ox = Math.cos(angle) * dist;
-        const oy = Math.sin(angle) * dist;
-        const size = evt.orbSize * (0.7 + 0.3 * Math.sin(clock * 0.4 + i));
-        const orb = ctx.createRadialGradient(ox, oy, 0, ox, oy, size);
-        orb.addColorStop(0, rgba(colorA, 0.8, hueShift));
-        orb.addColorStop(0.6, rgba(colorB, 0.45, hueShift));
-        orb.addColorStop(1, rgba(colorC, 0, hueShift));
-        ctx.globalAlpha = alpha * 0.5;
-        ctx.fillStyle = orb;
-        ctx.beginPath();
-        ctx.arc(ox, oy, size, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.restore();
-    }
-  }
-}
-
-function drawScreenEffects(ctx, screenW, screenH) {
-  const centerX = screenW / 2;
-  const centerY = screenH / 2;
-  const maxRadius = Math.max(screenW, screenH) * 0.6;
-  const minRadius = Math.min(screenW, screenH) * 0.25;
-
-  ctx.save();
-  ctx.globalCompositeOperation = "lighter";
-  const glow = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, maxRadius);
-  glow.addColorStop(0, "rgba(120, 200, 190, 0.12)");
-  glow.addColorStop(1, "rgba(0, 0, 0, 0)");
-  ctx.fillStyle = glow;
-  ctx.fillRect(0, 0, screenW, screenH);
-  ctx.restore();
-
-  ctx.save();
-  const vignette = ctx.createRadialGradient(centerX, centerY, minRadius, centerX, centerY, maxRadius);
-  vignette.addColorStop(0, "rgba(0, 0, 0, 0)");
-  vignette.addColorStop(1, "rgba(0, 0, 0, 0.45)");
-  ctx.fillStyle = vignette;
-  ctx.fillRect(0, 0, screenW, screenH);
-  ctx.restore();
-}
-
-function drawAlerts(ctx, screenW, screenH) {
-  if (alerts.length === 0) {
-    return;
-  }
-  let active = null;
-  for (const alert of alerts) {
-    if (alertClock >= alert.start && alertClock <= alert.start + alert.duration) {
-      if (!active || alert.start > active.start) {
-        active = alert;
-      }
-    }
-  }
-  if (!active) {
-    return;
-  }
-
-  const elapsed = alertClock - active.start;
-  const fadeWindow = Math.min(ALERT.FADE, active.duration / 2);
-  let alpha = 1;
-  if (elapsed < fadeWindow) {
-    alpha = elapsed / fadeWindow;
-  } else if (elapsed > active.duration - fadeWindow) {
-    alpha = (active.duration - elapsed) / fadeWindow;
-  }
-
-  ctx.save();
-  ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-  ctx.font = `18px ${HUD_FONT}`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  const x = screenW * 0.25;
-  const y = screenH * 0.25;
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = HUD_COLORS.ALERT_STROKE;
-  ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
-  ctx.strokeText(active.text, x, y);
-  ctx.fillText(active.text, x, y);
-  ctx.restore();
-}
-
-function updateBullets(dt) {
-  for (let i = bullets.length - 1; i >= 0; i--) {
-    const b = bullets[i];
-    b.x += b.vx * dt;
-    b.y += b.vy * dt;
-    b.life -= dt;
-    if (b.life <= 0) {
-      bullets.splice(i, 1);
-    }
-  }
-}
-
-function updateEnemyBullets(dt) {
-  if (enemyBullets.length === 0) {
-    return;
-  }
-  for (let i = enemyBullets.length - 1; i >= 0; i--) {
-    const b = enemyBullets[i];
-    b.x += b.vx * dt;
-    b.y += b.vy * dt;
-    b.life -= dt;
-    if (b.life <= 0) {
-      enemyBullets.splice(i, 1);
-      continue;
-    }
-    if (invulnTimer <= 0 && shipVisible) {
-      const dx = b.x - ship.x;
-      const dy = b.y - ship.y;
-      if (Math.hypot(dx, dy) < SHIP_RADIUS) {
-        enemyBullets.splice(i, 1);
-        if (b.owner) {
-          const ownerIndex = enemies.indexOf(b.owner);
-          if (ownerIndex !== -1) {
-            enemies.splice(ownerIndex, 1);
-          }
-          for (let j = enemyBullets.length - 1; j >= 0; j--) {
-            if (enemyBullets[j].owner === b.owner) {
-              enemyBullets.splice(j, 1);
-            }
-          }
-        }
-        triggerShake(SHAKE.HIT);
-        lives -= 1;
-        if (lives <= 0) {
-          spawnExplosion(ship.x, ship.y, "normal");
-          shipVisible = false;
-          sounds.play("game_over");
-          endGame();
-          return;
-        }
-        spawnExplosion(ship.x, ship.y, "normal");
-        sounds.play("lost_life");
-        queueRespawn();
-        return;
-      }
-    }
-  }
-}
-
-function updateFuelPickups(dt, activeStars) {
-  if (fuelPickups.length === 0) {
-    return;
-  }
-  for (const fuel of fuelPickups) {
-    fuel.update(dt);
-    applyGravity(fuel, activeStars, dt);
-    integrate(fuel, dt);
-  }
-}
-
-function handleFuelPickups() {
-  if (fuelPickups.length === 0) {
-    return;
-  }
-  for (let i = fuelPickups.length - 1; i >= 0; i--) {
-    const fuel = fuelPickups[i];
-    const dx = ship.x - fuel.x;
-    const dy = ship.y - fuel.y;
-    if (Math.hypot(dx, dy) < FUEL_PICKUP.RADIUS + SHIP_RADIUS) {
-      const refillAmount = ship.maxFuel * FUEL_PICKUP_AMOUNT_RATIO;
-      ship.fuel = Math.min(ship.maxFuel, ship.fuel + refillAmount);
-      addScore(SCORE_POINTS.FUEL, true);
-      sounds.play("got_fuel");
-      fuelPickups.splice(i, 1);
-    }
-  }
-}
-
-function handleBulletHits(activeSectors) {
-  if (bullets.length === 0) {
-    return;
-  }
-  for (let i = bullets.length - 1; i >= 0; i--) {
-    const b = bullets[i];
-    let hit = false;
-    for (let j = enemies.length - 1; j >= 0; j--) {
-      const enemy = enemies[j];
-      const dx = b.x - enemy.x;
-      const dy = b.y - enemy.y;
-      if (Math.hypot(dx, dy) < ENEMY_HIT_RADIUS + 3) {
-        spawnExplosion(enemy.x, enemy.y, "normal");
-        spawnFuelDrop(enemy, true);
-        sounds.play("explosion");
-        spawnEnemyChunks(enemy);
-        enemies.splice(j, 1);
-        bullets.splice(i, 1);
-        addScore(SCORE_POINTS.ENEMY, true, true);
-        hit = true;
-        break;
-      }
-    }
-    if (hit) {
-      continue;
-    }
-    for (const sector of activeSectors) {
-      for (let j = sector.asteroids.length - 1; j >= 0; j--) {
-        const a = sector.asteroids[j];
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const dist = Math.hypot(dx, dy);
-        if (dist < a.radius + 3) {
-          spawnFuelDrop(a);
-          const isChunk = a.spriteKey === "chunk";
-          const basePoints = isChunk
-            ? Math.round(SCORE_POINTS.ASTEROID * SCORE_CHUNK_MULTIPLIER)
-            : SCORE_POINTS.ASTEROID;
-          addScore(basePoints, true, true);
-          spawnExplosion(a.x, a.y, "normal");
-          sounds.play("explosion");
-          if (a.spriteKey !== "chunk") {
-            spawnAsteroidFragments(a, sector);
-          }
-          sector.asteroids.splice(j, 1);
-          bullets.splice(i, 1);
-          hit = true;
-          break;
-        }
-      }
-      if (hit) {
-        break;
-      }
-    }
-  }
-}
-
-function drawBullets(ctx) {
-  if (bullets.length === 0) {
-    return;
-  }
-  ctx.save();
-  ctx.globalCompositeOperation = "lighter";
-  for (const b of bullets) {
-    ctx.fillStyle = "rgba(255, 80, 80, 0.9)";
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, 3, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = "rgba(255, 120, 120, 0.5)";
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, 6, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.restore();
-}
-
-function drawEnemyBullets(ctx) {
-  if (enemyBullets.length === 0) {
-    return;
-  }
-  ctx.save();
-  ctx.globalCompositeOperation = "lighter";
-  for (const b of enemyBullets) {
-    ctx.fillStyle = "rgba(255, 60, 60, 0.9)";
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, 3, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = "rgba(255, 120, 120, 0.5)";
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, 6, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.restore();
-}
-
-function drawFuelPickups(ctx) {
-  if (fuelPickups.length === 0) {
-    return;
-  }
-  for (const fuel of fuelPickups) {
-    fuel.draw(ctx);
-  }
-}
-
-function spawnBullet() {
-  const fx = Math.sin(ship.heading);
-  const fy = -Math.cos(ship.heading);
-  const offset = 14;
-  bullets.push({
-    x: ship.x + fx * offset,
-    y: ship.y + fy * offset,
-    vx: fx * BULLET.SPEED,
-    vy: fy * BULLET.SPEED,
-    life: BULLET.LIFE
-  });
-}
-
-function updateEnemies(dt, activeStars) {
-  const inRange = [];
-  for (const enemy of enemies) {
-    const dx = ship.x - enemy.x;
-    const dy = ship.y - enemy.y;
-    const dist = Math.hypot(dx, dy);
-    const isInRange = dist <= MINIMAP.RANGE;
-    if (isInRange) {
-      inRange.push(enemy);
-    }
-    enemy.update(dt, ship.x, ship.y, true);
-    applyGravity(enemy, activeStars, dt);
-    integrate(enemy, dt);
-    if (enemy.canFire() && dist <= ENEMY_FIRE_RANGE) {
-      sounds.play("enemy_laser");
-      spawnEnemyBullet(enemy);
-      enemy.resetFireCooldown(ENEMY.FIRE_COOLDOWN);
-    }
-  }
-  return inRange;
-}
-
-function drawEnemies(ctx) {
-  for (const enemy of enemies) {
-    enemy.draw(ctx);
-  }
-}
-
-function spawnEnemyBullet(enemy) {
-  const fx = Math.sin(enemy.heading);
-  const fy = -Math.cos(enemy.heading);
-  const offset = 14;
-  enemyBullets.push({
-    x: enemy.x + fx * offset,
-    y: enemy.y + fy * offset,
-    vx: fx * BULLET.SPEED,
-    vy: fy * BULLET.SPEED,
-    life: ENEMY_BULLET_LIFE,
-    owner: enemy
-  });
-}
-
-function getEnemySpawnCountForSector(currentSector) {
-  if (!currentSector || currentSector.zone === "start") {
-    return 0;
-  }
-  if (currentSector.zone === "outer") {
-    return Math.random() < 0.5 ? 1 : 2;
-  }
-  return Math.random() < 0.5 ? 1 : 0;
 }
 
 function spawnEnemyForSurvey() {
@@ -3147,98 +2386,7 @@ function findEnemySpawnPoint() {
   };
 }
 
-function spawnAsteroidFragments(asteroid, sector) {
-  const fragmentCount = 2 + Math.floor(Math.random() * 4);
-  const baseSpeed = Math.hypot(asteroid.vx, asteroid.vy);
-  for (let i = 0; i < fragmentCount; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const speed = baseSpeed * (0.2 + Math.random() * 0.6) + 30 + Math.random() * 150;
-    const vx = Math.cos(angle) * speed;
-    const vy = Math.sin(angle) * speed;
-    const fragmentRadius = Math.max(4, asteroid.radius * (0.25 + Math.random() * 0.3));
-    sector.asteroids.push(
-      new Asteroid(asteroid.x, asteroid.y, vx, vy, fragmentRadius, 0, null, "chunk")
-    );
-  }
-}
-
-function spawnFuelDrop(source, guaranteed = false) {
-  if (!guaranteed && Math.random() > FUEL_PICKUP.DROP_CHANCE) {
-    return;
-  }
-  fuelPickups.push(new FuelPickup(source.x, source.y, source.vx, source.vy));
-}
-
-function updateEnemyPings(dt) {
-  for (let i = enemyPings.length - 1; i >= 0; i--) {
-    enemyPings[i].life -= dt;
-    if (enemyPings[i].life <= 0) {
-      enemyPings.splice(i, 1);
-    }
-  }
-}
-
-function updateParticles(dt) {
-  for (let i = particles.length - 1; i >= 0; i--) {
-    const p = particles[i];
-    p.update(dt);
-    if (p.life <= 0) {
-      particles.splice(i, 1);
-    }
-  }
-}
-
-function drawParticles(ctx) {
-  if (particles.length === 0) {
-    return;
-  }
-  ctx.save();
-  ctx.globalCompositeOperation = "lighter";
-  for (const p of particles) {
-    p.draw(ctx);
-  }
-  for (const p of particles) {
-    p.draw(ctx, 2.2, 0.35);
-  }
-  ctx.restore();
-}
-
-function spawnExplosion(x, y, type = "normal") {
-  const count = type === "star" ? 140 : 90;
-  const color = type === "star" ? "#ffe6a6" : "#ffb25a";
-  for (let i = 0; i < count; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 80 + Math.random() * 260;
-    const life = 0.6 + Math.random() * 0.8;
-    const size = 3 + Math.random() * 5;
-    particles.push(new Particle(x, y, angle, speed, life, color, size));
-  }
-}
-
-function spawnEnemyChunks(enemy) {
-  const count = ENEMY_CHUNK.COUNT_MIN
-    + Math.floor(Math.random() * (ENEMY_CHUNK.COUNT_MAX - ENEMY_CHUNK.COUNT_MIN + 1));
-  const baseSpeed = Math.hypot(enemy.vx, enemy.vy);
-  for (let i = 0; i < count; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const speed = ENEMY_CHUNK.SPEED_MIN
-      + Math.random() * (ENEMY_CHUNK.SPEED_MAX - ENEMY_CHUNK.SPEED_MIN)
-      + baseSpeed * 0.35;
-    const vx = Math.cos(angle) * speed + enemy.vx * 0.4;
-    const vy = Math.sin(angle) * speed + enemy.vy * 0.4;
-    const size = ENEMY_CHUNK.SIZE_MIN
-      + Math.random() * (ENEMY_CHUNK.SIZE_MAX - ENEMY_CHUNK.SIZE_MIN);
-    const life = ENEMY_CHUNK.LIFE_MIN
-      + Math.random() * (ENEMY_CHUNK.LIFE_MAX - ENEMY_CHUNK.LIFE_MIN);
-    const rotSpeed = (Math.random() < 0.5 ? -1 : 1)
-      * (ENEMY_CHUNK.ROT_SPEED_MIN
-      + Math.random() * (ENEMY_CHUNK.ROT_SPEED_MAX - ENEMY_CHUNK.ROT_SPEED_MIN));
-    particles.push(new EnemyChunk(enemy.x, enemy.y, vx, vy, size, rotSpeed, life));
-  }
-}
-
-
-  requestAnimationFrame(loop);
+requestAnimationFrame(loop);
 
   function endGame() {
     if (gameOver) {
@@ -3267,6 +2415,10 @@ function spawnEnemyChunks(enemy) {
       cancelAnimationFrame(rafId);
     }
     cleanupMouseControls();
+    if (gameState) {
+      saveGameState(gameState);
+    }
+    saveSectorIndex(sectorIndex);
     if (onGameOver) {
       onGameOver(cachedGameOverStats);
     }
@@ -3284,6 +2436,10 @@ function spawnEnemyChunks(enemy) {
     ship.stopRotateLoop();
     music.stop();
     cleanupMouseControls();
+    if (gameState) {
+      saveGameState(gameState);
+    }
+    saveSectorIndex(sectorIndex);
   }
 
   function updateZoom(dt) {

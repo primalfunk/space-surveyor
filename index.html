@@ -72,6 +72,13 @@
       opacity: 0.75;
       min-height: 24px;
     }
+    .start-reset-hint {
+      font-size: 12px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--ui-muted);
+      opacity: 0.75;
+    }
     .start-blurb {
       font-size: 21px;
       letter-spacing: 1px;
@@ -306,7 +313,8 @@
       border: 1px solid var(--ui-line-strong);
       color: var(--ui-text);
       border-radius: 999px;
-      padding: 14px 34px;
+      padding: 10px 24px;
+      font-size: 16px;
       box-shadow:
         0 0 12px var(--ui-glow),
         inset 0 0 18px rgba(80, 160, 160, 0.2);
@@ -518,6 +526,27 @@
     .level-complete-subtitle {
       font-size: 16px;
       opacity: 0.85;
+    }
+    .ship-destroyed-panel {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 22px 32px;
+      border: 2px solid var(--ui-danger);
+      background: var(--ui-panel-strong);
+      box-shadow: 0 0 18px rgba(200, 110, 110, 0.25);
+    }
+    .ship-destroyed-title {
+      font-size: 38px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--ui-danger);
+    }
+    .ship-destroyed-subtitle {
+      font-size: 16px;
+      opacity: 0.85;
+      letter-spacing: 1px;
     }
   </style>
 </head>

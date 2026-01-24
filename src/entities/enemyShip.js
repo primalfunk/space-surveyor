@@ -1,11 +1,14 @@
-const ENEMY_ROT_SPEED = 2.5;
-const ENEMY_THRUST = 120;
-const ENEMY_MAX_SPEED = 220;
-const ENEMY_STRAFE_RANGE = 520;
-const ENEMY_STRAFE_BUFFER = 90;
-const ENEMY_DRAW_SIZE = 36;
+import { CONFIG } from "../game/config.js";
+
+const { ENEMY } = CONFIG;
+const ENEMY_ROT_SPEED = ENEMY.ROT_SPEED;
+const ENEMY_THRUST = ENEMY.THRUST;
+const ENEMY_MAX_SPEED = ENEMY.MAX_SPEED;
+const ENEMY_STRAFE_RANGE = ENEMY.STRAFE_RANGE;
+const ENEMY_STRAFE_BUFFER = ENEMY.STRAFE_BUFFER;
+const ENEMY_DRAW_SIZE = ENEMY.DRAW_SIZE;
 const ENEMY_SPRITE = new Image();
-ENEMY_SPRITE.src = "assets/ui/sprites/enemy_ship.png";
+ENEMY_SPRITE.src = ENEMY.SPRITE_SRC;
 
 export class EnemyShip {
   constructor(x, y) {

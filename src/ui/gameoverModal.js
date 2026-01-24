@@ -1,6 +1,9 @@
-const SCORE_ENDPOINT = "/api/score/";
-const MIN_QUALIFY_SCORE = 100;
-const NAME_MAX_LENGTH = 12;
+import { CONFIG } from "../game/config.js";
+
+const { SCOREBOARD } = CONFIG.UI;
+const SCORE_ENDPOINT = SCOREBOARD.ENDPOINT;
+const MIN_QUALIFY_SCORE = SCOREBOARD.MIN_QUALIFY_SCORE;
+const NAME_MAX_LENGTH = SCOREBOARD.NAME_MAX_LENGTH;
 
 function qualifies(score, scores) {
   if (score < MIN_QUALIFY_SCORE) {

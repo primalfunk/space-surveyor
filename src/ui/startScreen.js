@@ -1,6 +1,6 @@
 import { sounds } from "../game/audio.js";
 
-export function showStartScreen(root, onStart) {
+export function showStartScreen(root, onStart, onReset) {
   if (!root) {
     return null;
   }
@@ -24,7 +24,11 @@ export function showStartScreen(root, onStart) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "start-button start-capsule";
-  button.textContent = "Press Space to Start";
+  button.textContent = "Press Space to Continue";
+
+  const resetHint = document.createElement("div");
+  resetHint.className = "start-reset-hint";
+  resetHint.textContent = "Hold Shift + Space to Reset World";
 
   const blurb = document.createElement("div");
   blurb.className = "start-blurb";
@@ -226,6 +230,7 @@ export function showStartScreen(root, onStart) {
   panel.appendChild(subtitle);
   panel.appendChild(carousel);
   panel.appendChild(button);
+  panel.appendChild(resetHint);
   panel.appendChild(blurb);
   overlay.appendChild(panel);
   root.appendChild(overlay);
@@ -257,6 +262,9 @@ export function showStartScreen(root, onStart) {
   const onKeyDown = (event) => {
     if (event.code === "Space") {
       event.preventDefault();
+      if (event.shiftKey && onReset) {
+        onReset();
+      }
       start();
     }
   };

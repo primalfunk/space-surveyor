@@ -1,9 +1,12 @@
 
+import { CONFIG } from "../game/config.js";
+
+const { END_ZONE } = CONFIG;
 const SCAN_SPRITE = new Image();
-SCAN_SPRITE.src = "assets/ui/sprites/scan_point.png";
-const SCAN_ROT_SPEED = 2.2;
-const SCAN_PULSE_SPEED = 3.2;
-const SCAN_PULSE_AMOUNT = 0.08;
+SCAN_SPRITE.src = END_ZONE.SPRITE_SRC;
+const SCAN_ROT_SPEED = END_ZONE.ROT_SPEED;
+const SCAN_PULSE_SPEED = END_ZONE.PULSE_SPEED;
+const SCAN_PULSE_AMOUNT = END_ZONE.PULSE_AMOUNT;
 
 export class EndZone {
   constructor(x, y, width, height) {

@@ -1,0 +1,37 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="beacon-core" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a0f12"/>
+      <stop offset="60%" stop-color="#0f161b"/>
+      <stop offset="100%" stop-color="#121b20"/>
+    </linearGradient>
+    <linearGradient id="beacon-edge" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0%" stop-color="#9fd6cb" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#7cc8be" stop-opacity="0.7"/>
+    </linearGradient>
+  </defs>
+  <path
+    d="M44 22 L128 12 L172 64 L154 176 L88 164 L28 96 Z"
+    fill="url(#beacon-core)"
+    stroke="url(#beacon-edge)"
+    stroke-width="5"
+  />
+  <path
+    d="M78 46 L120 40 L140 76 L130 134 L92 128 L66 84 Z"
+    fill="#182128"
+    stroke="#2c3b44"
+    stroke-width="3"
+  />
+  <path
+    d="M112 92 L126 114 L104 132 L86 116 Z"
+    fill="#0c1216"
+    stroke="#7cc8be"
+    stroke-width="2"
+    opacity="0.55"
+  />
+  <path
+    d="M60 96 L74 86 L80 112 L64 126 Z"
+    fill="#0b1115"
+    opacity="0.7"
+  />
+</svg>

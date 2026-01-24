@@ -1,0 +1,677 @@
+// Centralized tuning values for gameplay, visuals, audio, and generation.
+// Keep this file human-readable; prefer descriptive grouping over flat lists.
+
+// Storage keys.
+const STORAGE = {
+  GAME_STATE_KEY: "spaceGame_gameState_v1",
+  SECTOR_INDEX_KEY: "spaceGame_sectorIndex_v1",
+  MOUSE_AIM_KEY: "spaceSurveyor_mouseAim"
+};
+
+// Debug toggles for development.
+const DEBUG = {
+  VECTORS: true
+};
+
+// Camera controls and screen shake.
+const CAMERA = {
+  ZOOM: {
+    MIN: 0.4,
+    MAX: 2.0,
+    SPEED: 0.7,
+    WHEEL_STEP: 0.12
+  },
+  SHAKE: {
+    DURATION: 0.35,
+    HIT: 6,
+    SURVEY: 3,
+    FIRE: 0.6
+  }
+};
+
+// Core gameplay pacing.
+const GAMEPLAY = {
+  ACTIVE_SECTOR_RANGE: 1,
+  STARTING_LIVES: 3,
+  INVULN_DURATION: 1.25,
+  GAME_OVER_DELAY: 0.7,
+  RESPAWN_DELAY: 0.6
+};
+
+// Scoring values and popup styling.
+const SCORE = {
+  CHUNK_MULTIPLIER: 0.5,
+  POINTS: {
+    ASTEROID: 5,
+    ENEMY: 25,
+    FUEL: 15,
+    SURVEY: 40
+  },
+  POPUP: {
+    LIFE: 1.1,
+    RISE: 26,
+    SCALE_START: 0.6,
+    SCALE_END: 1.25,
+    GROW_TIME: 0.22,
+    EDGE_MARGIN: 24,
+    FONT_SIZE: 18
+  },
+  POPUP_COLORS: {
+    survey: "rgba(120, 200, 190, 0.95)",
+    fuel: "rgba(120, 220, 180, 0.95)",
+    enemy: "rgba(200, 110, 110, 0.95)",
+    asteroid: "rgba(210, 185, 150, 0.95)",
+    chain: "rgba(120, 220, 255, 0.95)",
+    gate: "rgba(170, 210, 220, 0.95)",
+    generic: "rgba(230, 240, 240, 0.95)"
+  }
+};
+
+// Beacon exposure system.
+const BEACON = {
+  OBSERVER_RADIUS: 900,
+  OBSERVE_RATE: 0.00002,
+  RETURN_BONUS: 0.02,
+  SURVEY_BONUS: 0.05,
+  MIDCYCLE_PENALTY: 0.03,
+  VISIT_COOLDOWN: 600,
+  SIGNAL_CYCLE: 60
+};
+
+// Calibration gates and sizing reference.
+const CALIBRATION = {
+  // Ship radius reference for gate sizing, not the collision radius.
+  SHIP_RADIUS: 24,
+  GATE: {
+    SPAWN_MIN: 5,
+    SPAWN_MAX: 10,
+    FADE_TIME: 0.5,
+    LIFETIME: 30,
+    EXCLUSION_RADIUS: 220,
+    CRUISE_MIN: 180,
+    CRUISE_MAX: 260,
+    CRUISE_SPEED: 220,
+    SPAWN_LATERAL: 220,
+    BASE_THICKNESS: 2,
+    POLE_RATIO: 0.14,
+    EDGE_OFFSET: 60,
+    BASE_VIEW_RADIUS: 900,
+    CHAIN_MIN: 3,
+    CHAIN_MAX: 9,
+    CHAIN_ARC_MIN: Math.PI / 10,
+    CHAIN_ARC_MAX: Math.PI / 5,
+    GATE_SCORE_BASE: 10,
+    CHAIN_SCORE_BASE: 10,
+    CHAIN_ATTEMPTS: 6,
+    WEIGHTS: {
+      CHAIN_GATE: 0.4,
+      EXIT_ALIGNMENT_GATE: 0.3,
+      DISPLACEMENT_GATE: 0.2,
+      SHUTDOWN_GATE: 0.1
+    },
+    TYPES: {
+      CHAIN: "CHAIN_GATE",
+      DISPLACEMENT: "DISPLACEMENT_GATE",
+      EXIT: "EXIT_ALIGNMENT_GATE",
+      SHUTDOWN: "SHUTDOWN_GATE"
+    },
+    COLORS: {
+      CHAIN: "rgba(80, 200, 255, 0.7)",
+      DISPLACEMENT: "rgba(200, 120, 255, 0.7)",
+      EXIT: "rgba(255, 190, 90, 0.7)",
+      SHUTDOWN: "rgba(220, 70, 70, 0.75)"
+    },
+    WIDTH_MULTIPLIERS: {
+      CHAIN_GATE: 1.6,
+      DISPLACEMENT_GATE: 2.2,
+      EXIT_ALIGNMENT_GATE: 1.3,
+      SHUTDOWN_GATE: 2.0
+    }
+  }
+};
+
+// Background layers and transient events.
+const BACKGROUND = {
+  STARFIELD: {
+    DENSITY: 0.002,
+    ALPHA: 0.45,
+    BRIGHTNESS_MIN: 180,
+    BRIGHTNESS_MAX: 255,
+    PARALLAX: 0.03
+  },
+  DUSTFIELD: {
+    DENSITY: 0.0012,
+    ALPHA: 0.22,
+    BRIGHTNESS_MIN: 80,
+    BRIGHTNESS_MAX: 160,
+    PARALLAX: 0.015
+  },
+  FARFIELD: {
+    DENSITY: 0.0007,
+    ALPHA: 0.18,
+    BRIGHTNESS_MIN: 110,
+    BRIGHTNESS_MAX: 190,
+    PARALLAX: 0.008
+  },
+  SLICE: {
+    DENSITY: 0.001,
+    ALPHA: 0.22,
+    ROT_SPEED: 0.00005,
+    PARALLAX: 0.01,
+    ARC: Math.PI * 1.1
+  },
+  EVENTS: {
+    MIN_INTERVAL: 3.5,
+    MAX_INTERVAL: 7.5,
+    MAX_ACTIVE: 5,
+    EDGE_MARGIN: 80,
+    CLUSTER_CHANCE: 0.35,
+    CLUSTER_MIN: 2,
+    CLUSTER_MAX: 3,
+    CLUSTER_OFFSET: 140
+  },
+  PALETTE: [
+    [255, 80, 220],
+    [80, 240, 255],
+    [200, 255, 90],
+    [255, 150, 60],
+    [160, 90, 255],
+    [255, 90, 140]
+  ],
+  NEBULA: {
+    ALPHA: 0.2,
+    ROT_SPEED: 0.00003,
+    PARALLAX: 0.006,
+    RADIUS_SCALE: 0.6,
+    RING_WIDTH: 0.16,
+    BLOB_COUNT: 28
+  }
+};
+
+// Particle and trail effects.
+const EFFECTS = {
+  THRUST_PARTICLES: {
+    RATE: 36,
+    SPEED_MIN: 40,
+    SPEED_MAX: 140,
+    LIFE_MIN: 0.18,
+    LIFE_MAX: 0.45,
+    SIZE_MIN: 1.4,
+    SIZE_MAX: 3.2,
+    SPREAD: 0.45,
+    OFFSET: 12
+  },
+  TRAIL_SPARKS: {
+    RATE: 18,
+    SPEED_MIN: 30,
+    SPEED_MAX: 160,
+    LIFE_MIN: 0.12,
+    LIFE_MAX: 0.4,
+    SIZE_MIN: 1.1,
+    SIZE_MAX: 2.8,
+    SPREAD: 0.8,
+    OFFSET: 10
+  },
+  TRAIL_DISPERSE: {
+    BASE_WIDTH: 3,
+    SPREAD: 10
+  },
+  TRAIL_COLOR: {
+    SPEED: 520,
+    SLOW: [90, 140, 220],
+    FAST: [200, 240, 255]
+  },
+  CONTROL_DISABLE: {
+    DURATION: 10,
+    PULSE_MIN: 0.25,
+    PULSE_MAX: 0.6
+  }
+};
+
+// Input tuning.
+const INPUT = {
+  TOUCH: {
+    DEADZONE: 12,
+    MAX_RADIUS_MIN: 60,
+    MAX_RADIUS_MAX: 110,
+    MOVE_ZONE: 0.5,
+    HINT_ALPHA: 0.22,
+    ACTIVE_ALPHA: 0.45
+  }
+};
+
+// HUD look and feel.
+const HUD = {
+  FONT: "'Orbitron', 'Bank Gothic', 'Eurostile', 'Consolas', monospace",
+  ALERT: {
+    DURATION: 2,
+    FADE: 0.25
+  },
+  COLORS: {
+    PANEL_START: "rgba(8, 12, 16, 0.9)",
+    PANEL_END: "rgba(14, 24, 28, 0.82)",
+    PANEL_STROKE: "rgba(120, 170, 180, 0.55)",
+    PANEL_TICK: "rgba(200, 220, 220, 0.18)",
+    PANEL_TEXT: "rgba(230, 240, 240, 0.95)",
+    PANEL_MUTED: "rgba(170, 188, 194, 0.7)",
+    ACCENT: "rgba(120, 200, 190, 0.95)",
+    ACCENT_SOFT: "rgba(120, 200, 190, 0.35)",
+    ACCENT_GLOW: "rgba(120, 200, 190, 0.55)",
+    WARM: "rgba(210, 185, 150, 0.95)",
+    WARNING: "rgba(210, 130, 120, 0.95)",
+    ENEMY: "rgba(200, 110, 110, 0.9)",
+    ASTEROID: "rgba(180, 185, 190, 0.4)",
+    MAP_BG: "rgba(6, 10, 12, 0.65)",
+    MAP_COMPLETE: "rgba(100, 170, 160, 0.1)",
+    ALERT_STROKE: "rgba(6, 10, 12, 0.75)"
+  },
+  MINIMAP: {
+    SIZE: 200,
+    RANGE: 3000
+  },
+  COMPASS: {
+    WIDTH: 320,
+    HEIGHT: 78,
+    Y_OFFSET: 55,
+    FOV: Math.PI,
+    TICK_DEG: 15
+  },
+  BEARING: {
+    RADIUS: 36,
+    CHEVRON_LENGTH: 9,
+    CHEVRON_WIDTH: 5,
+    CHEVRON_GAP: 7,
+    DRIFT_AMPLITUDE: 4,
+    DRIFT_SPEED: 0.0035,
+    PULSE_SPEED: 0.0045,
+    FUEL_SIZE: 3,
+    SCAN_PRIMARY_ALPHA: 0.8,
+    SCAN_SECONDARY_ALPHA: 0.45,
+    FUEL_ALPHA: 0.3,
+    DANGER_ALPHA: 0.85,
+    DANGER_PULSE_SPEED: 0.012,
+    DANGER_FLICKER_SPEED: 0.045,
+    DANGER_DRIFT_SPEED: 0.006,
+    FUEL_MAX_DOTS: 3
+  },
+  SCAN_PULSE: {
+    PERIOD: 2400,
+    RADIUS_MIN: 16,
+    RADIUS_MAX: 160,
+    LINE_WIDTH: 2
+  }
+};
+
+// UI-specific endpoints and thresholds.
+const UI = {
+  SCOREBOARD: {
+    ENDPOINT: "/api/score/",
+    MIN_QUALIFY_SCORE: 100,
+    NAME_MAX_LENGTH: 12
+  }
+};
+
+// Physics constants.
+const PHYSICS = {
+  GRAVITY_G: 4000,
+  SOFTENING: 80,
+  DAMPING: 0.999
+};
+
+// Player projectile tuning.
+const BULLET = {
+  SPEED: 900,
+  LIFE: 1.2,
+  COOLDOWN: 0.26,
+  FIRE_LOCKOUT: 0.5
+};
+
+// Player ship tuning and visuals.
+const SHIP = {
+  ROT_SPEED: 2.5,
+  THRUST: 200,
+  MAX_FUEL: 400,
+  THRUST_FUEL_RATE: 18,
+  ROT_FUEL_RATE: 0,
+  DRAW_SIZE: 24,
+  COLLISION_RADIUS: 12,
+  SPRITE_SRC: "assets/ui/sprites/ship.png",
+  THRUST_LOOP_SEGMENT: 0.4,
+  THRUST_LOOP_CROSSFADE: 0.16,
+  THRUST_VISUAL: {
+    PLUME_BASE: 14,
+    PLUME_MAX: 32,
+    PLUME_SPEED: 22,
+    PLUME_WIDTH: 9,
+    KICK_DURATION: 0.14,
+    KICK_RADIUS: 10,
+    KICK_ALPHA: 0.65,
+    SHIMMER_COUNT: 3,
+    SHIMMER_LENGTH: 16,
+    SHIMMER_WIDTH: 2.6,
+    FLARE_RADIUS: 12,
+    FLARE_ALPHA: 0.25
+  },
+  TRAIL: {
+    MAX: 200,
+    MIN_DIST: 6,
+    FADE_SPEED: 24,
+    FADE_STEP: 0.02
+  }
+};
+
+// Enemy ship tuning and spawn behavior.
+const ENEMY = {
+  ROT_SPEED: 2.5,
+  THRUST: 120,
+  MAX_SPEED: 220,
+  STRAFE_RANGE: 520,
+  STRAFE_BUFFER: 90,
+  DRAW_SIZE: 36,
+  SPRITE_SRC: "assets/ui/sprites/enemy_ship.png",
+  HIT_RADIUS: 12,
+  FIRE_COOLDOWN: BULLET.COOLDOWN * 2,
+  SPAWN_MARGIN: 120,
+  RANGE_SCALE: 2 / 3
+};
+
+// Pickup visuals and spawn tuning.
+const PICKUPS = {
+  FUEL: {
+    AMOUNT_RATIO: 1.0,
+    WIDTH: 12,
+    HEIGHT: 24,
+    RADIUS: 14,
+    DROP_CHANCE: 1 / 3,
+    ROT_SPEED_MIN: 0.5,
+    ROT_SPEED_MAX: 1.1,
+    SPRITE_SRC: "assets/ui/sprites/fuel.png"
+  },
+  ENEMY_CHUNK: {
+    COUNT_MIN: 5,
+    COUNT_MAX: 9,
+    SPEED_MIN: 90,
+    SPEED_MAX: 240,
+    SIZE_MIN: 8,
+    SIZE_MAX: 16,
+    LIFE_MIN: 0.5,
+    LIFE_MAX: 1.2,
+    ROT_SPEED_MIN: 2.0,
+    ROT_SPEED_MAX: 5.0,
+    SPRITE_SRC: "assets/ui/sprites/enemy_chunk.png"
+  }
+};
+
+// Beacon relic visual defaults.
+const BEACON_RELIC = {
+  SPRITE_SRC: "assets/ui/sprites/beacon.png",
+  SIZE: 180,
+  SHIMMER_SPEED: 0.35
+};
+
+// Goal / survey target tuning.
+const GOAL = {
+  SPRITE_SRC: "assets/ui/sprites/fuel.png",
+  WIDTH: 12,
+  HEIGHT: 24,
+  MARGIN: 300,
+  MIN_SHIP_DIST: 900,
+  MIN_STAR_DIST: 300,
+  ROT_SPEED_MIN: 0.4,
+  ROT_SPEED_MAX: 1.0,
+  ANCHOR_RADIUS_DEFAULT: 480
+};
+
+// End zone visuals and sizing.
+const END_ZONE = {
+  SPRITE_SRC: "assets/ui/sprites/scan_point.png",
+  WIDTH: 30,
+  HEIGHT: 16,
+  MARGIN: 120,
+  MIN_GOAL_DIST: 600,
+  ROT_SPEED: 2.2,
+  PULSE_SPEED: 3.2,
+  PULSE_AMOUNT: 0.08
+};
+
+// Asteroid visuals and generation tuning.
+const ASTEROID = {
+  SPRITE_SRC: "assets/ui/sprites/asteroid.png",
+  CHUNK_SPRITE_SRC: "assets/ui/sprites/asteroid_chunk.png",
+  ROT_SPEED_MIN: 0.05,
+  ROT_SPEED_MAX: 0.18,
+  GENERATION: {
+    COUNT: 12,
+    SPEED_MIN: 5,
+    SPEED_MAX: 120,
+    RADIUS_MIN: 10,
+    RADIUS_MAX: 44,
+    SPAWN_MARGIN: 400,
+    CLUSTER: {
+      COUNT_MIN: 2,
+      COUNT_MAX: 4,
+      RADIUS_MIN: 220,
+      RADIUS_MAX: 520
+    }
+  }
+};
+
+// Star visuals and generation tuning.
+const STAR = {
+  SPRITES: {
+    yellow: "assets/ui/sprites/yellow_star.png",
+    red: "assets/ui/sprites/red_star.png",
+    blue: "assets/ui/sprites/blue_star.png"
+  },
+  DEFAULTS: {
+    MASS: 1500,
+    BODY_RADIUS: 60,
+    BODY_COLOR: "gold",
+    WELL_FILL: "rgba(255, 255, 200, 0.06)",
+    WELL_STROKE: "rgba(255, 255, 200, 0.2)",
+    MINIMAP_COLOR: "gold",
+    SPRITE_KEY: "yellow",
+    GRAVITY_RADIUS_MULTIPLIER: 6,
+    PULSE_SPEED: 1.0,
+    PULSE_AMOUNT: 0.06
+  },
+  GENERATION: {
+    MASS_MIN: 1200,
+    MASS_MAX: 2200,
+    MARGIN: 400,
+    BODY_RADIUS: 42,
+    WELL: {
+      BASE_RADIUS: 441,
+      VARIANCE: 0.2
+    },
+    ROTATION: {
+      YELLOW_MIN: 0.25,
+      YELLOW_MAX: 0.35,
+      RED_MIN: 0.4,
+      RED_MAX: 0.55,
+      BLUE_MIN: 0.6,
+      BLUE_MAX: 0.8
+    },
+    PULSE: {
+      YELLOW_SPEED_MIN: 0.7,
+      YELLOW_SPEED_MAX: 1.0,
+      RED_SPEED_MIN: 0.9,
+      RED_SPEED_MAX: 1.2,
+      BLUE_SPEED_MIN: 1.1,
+      BLUE_SPEED_MAX: 1.5,
+      YELLOW_AMOUNT: 0.05,
+      RED_AMOUNT: 0.08,
+      BLUE_AMOUNT: 0.12
+    },
+    TYPES: {
+      yellow: {
+        id: "yellow",
+        bodyColor: "gold",
+        wellFill: "rgba(255, 255, 200, 0.06)",
+        wellStroke: "rgba(255, 255, 200, 0.2)",
+        minimapColor: "gold",
+        spriteKey: "yellow",
+        wellMultiplier: 1.3,
+        massMultiplier: 2.5
+      },
+      red: {
+        id: "red",
+        bodyColor: "#ff4d4d",
+        wellFill: "rgba(255, 80, 80, 0.06)",
+        wellStroke: "rgba(255, 80, 80, 0.2)",
+        minimapColor: "#ff6b6b",
+        spriteKey: "red",
+        wellMultiplier: 1.0,
+        massMultiplier: 1.0
+      },
+      blue: {
+        id: "blue",
+        bodyColor: "#66ccff",
+        wellFill: "rgba(120, 180, 255, 0.06)",
+        wellStroke: "rgba(120, 180, 255, 0.2)",
+        minimapColor: "#7ad2ff",
+        spriteKey: "blue",
+        wellMultiplier: 1.69,
+        massMultiplier: 4.0
+      }
+    },
+    RATE_MULTIPLIER: 3
+  }
+};
+
+// Sector generation and persistence tuning.
+const SECTOR = {
+  SIZE: 6000,
+  ENTRY_SAFE_RADIUS: 900,
+  START_SAFE_RADIUS: 1600,
+  BEACON_SAFE_PADDING: 320,
+  MIN_ORIGIN_RING: 8,
+  ORIGIN_COOLDOWN: 11,
+  ECHO_MIN_EXPOSURE: 0.2,
+  TYPES: {
+    GENERIC: "GENERIC",
+    DEAD_QUIET: "DEAD_QUIET",
+    ECHO: "ECHO",
+    ANOMALY: "ANOMALY",
+    DERELICT_FIELD: "DERELICT_FIELD",
+    SIGNAL_ORIGIN: "SIGNAL_ORIGIN"
+  },
+  MOODS: ["NEUTRAL", "QUIET", "UNSETTLING", "FAMILIAR", "ARTIFICIAL"],
+  ANOMALY_MODIFIERS: [
+    "SCANNER_JITTER",
+    "RANGE_DRIFT",
+    "ORIENTATION_DRIFT",
+    "PULSE_GHOSTS"
+  ],
+  SPAWN_PROFILES: {},
+  SEED_SALT: {
+    TYPE: 101,
+    MOOD: 202,
+    ANOMALY: 303,
+    ECHO: 404,
+    BEACON: 505,
+    STARS: 606,
+    GOAL: 707,
+    END_ZONE: 808,
+    ASTEROIDS: 909
+  },
+  ZONES: {
+    start: { id: "start", asteroidMultiplier: 0.5 },
+    middle: { id: "middle", asteroidMultiplier: 1.0 },
+    outer: { id: "outer", asteroidMultiplier: 1.3 }
+  }
+};
+
+SECTOR.SPAWN_PROFILES = {
+  [SECTOR.TYPES.GENERIC]: {
+    stars: 1.0,
+    asteroids: 1.0,
+    scanPoints: 1.0,
+    hazards: 1.0
+  },
+  [SECTOR.TYPES.DEAD_QUIET]: {
+    stars: 0.2,
+    asteroids: 0.1,
+    scanPoints: 0.2,
+    hazards: 0.3
+  },
+  [SECTOR.TYPES.DERELICT_FIELD]: {
+    stars: 0.8,
+    asteroids: 1.4,
+    scanPoints: 0.8,
+    hazards: 1.2
+  },
+  [SECTOR.TYPES.ANOMALY]: {
+    stars: 0.6,
+    asteroids: 0.6,
+    scanPoints: 1.2,
+    hazards: 1.5
+  },
+  [SECTOR.TYPES.ECHO]: {
+    stars: 1.0,
+    asteroids: 1.0,
+    scanPoints: 0.9,
+    hazards: 1.0
+  },
+  [SECTOR.TYPES.SIGNAL_ORIGIN]: {
+    stars: 0.4,
+    asteroids: 0.05,
+    scanPoints: 0.2,
+    hazards: 0.6
+  }
+};
+
+// Audio file map and music playlist.
+const AUDIO = {
+  SOUNDS: {
+    start_game: { src: "assets/sounds/mp3/start_game.mp3", volume: 0.9 },
+    laser: { src: "assets/sounds/mp3/laser.mp3", volume: 0.13125 },
+    enemy_laser: { src: "assets/sounds/mp3/laser.mp3", volume: 0.09375 },
+    explosion: { src: "assets/sounds/mp3/explosion.mp3", volume: 0.85 },
+    lost_life: { src: "assets/sounds/mp3/lost_life.mp3", volume: 0.9 },
+    got_fuel: { src: "assets/sounds/mp3/got_fuel.mp3", volume: 0.8 },
+    got_gate: { src: "assets/sounds/mp3/got_gate.mp3", volume: 1 },
+    got_survey: { src: "assets/sounds/mp3/got_survey.mp3", volume: 0.85 },
+    game_over: { src: "assets/sounds/mp3/game_over.mp3", volume: 0.9 },
+    thrust: { src: "assets/sounds/mp3/thrust.mp3", volume: 0.7 },
+    thrust_rotate: { src: "assets/sounds/mp3/thrust.mp3", volume: 0.2 }
+  },
+  MUSIC: {
+    TRACKS: [
+      "assets/sounds/mp3/1. failed_before.mp3",
+      "assets/sounds/mp3/2. remind_me_later.mp3",
+      "assets/sounds/mp3/3. take_it_easy.mp3",
+      "assets/sounds/mp3/4. where_the_time_goes.mp3",
+      "assets/sounds/mp3/5. the_noise_in_my_head.mp3",
+      "assets/sounds/mp3/6. noonquil.mp3"
+    ],
+    VOLUME: 0.45
+  }
+};
+
+export const CONFIG = {
+  STORAGE,
+  DEBUG,
+  CAMERA,
+  GAMEPLAY,
+  SCORE,
+  BEACON,
+  CALIBRATION,
+  BACKGROUND,
+  EFFECTS,
+  INPUT,
+  HUD,
+  UI,
+  PHYSICS,
+  BULLET,
+  SHIP,
+  ENEMY,
+  PICKUPS,
+  BEACON_RELIC,
+  GOAL,
+  END_ZONE,
+  ASTEROID,
+  STAR,
+  SECTOR,
+  AUDIO
+};

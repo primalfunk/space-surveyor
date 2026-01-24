@@ -1,6 +1,7 @@
-export const GRAVITY_G = 4000;
-const SOFTENING = 80;
-const DAMPING = 0.999;
+import { CONFIG } from "./config.js";
+
+export const GRAVITY_G = CONFIG.PHYSICS.GRAVITY_G;
+const { SOFTENING, DAMPING } = CONFIG.PHYSICS;
 
 export function applyGravity(entity, stars, dt, debugCb = null) {
   for (const star of stars) {

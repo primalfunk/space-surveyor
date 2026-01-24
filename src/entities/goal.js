@@ -1,14 +1,25 @@
+import { CONFIG } from "../game/config.js";
+
+const { GOAL } = CONFIG;
+
 export class Goal {
-  constructor(x, y, width, height) {
+  constructor(x, y, width, height, options = {}) {
     this.x = x;
     this.y = y;
     this.width = width;
     this.height = height;
     this.sprite = new Image();
-    this.sprite.src = "assets/ui/sprites/fuel.png";
-    this.rotation = Math.random() * Math.PI * 2;
-    const speed = 0.4 + Math.random() * 0.6;
-    this.rotationSpeed = (Math.random() < 0.5 ? -1 : 1) * speed;
+    this.sprite.src = GOAL.SPRITE_SRC;
+    const rotation = Number.isFinite(options.rotation)
+      ? options.rotation
+      : Math.random() * Math.PI * 2;
+    const speed = Number.isFinite(options.rotationSpeed)
+      ? Math.abs(options.rotationSpeed)
+      : GOAL.ROT_SPEED_MIN + Math.random() * (GOAL.ROT_SPEED_MAX - GOAL.ROT_SPEED_MIN);
+    this.rotation = rotation;
+    this.rotationSpeed = Number.isFinite(options.rotationSpeed)
+      ? options.rotationSpeed
+      : (Math.random() < 0.5 ? -1 : 1) * speed;
   }
 
   update(dt) {

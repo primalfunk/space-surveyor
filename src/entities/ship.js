@@ -1,29 +1,19 @@
-const ROT_SPEED = 2.5;     // radians/sec
-const THRUST = 200;
-const MAX_FUEL = 400;
-const THRUST_FUEL_RATE = 18;
-const ROT_FUEL_RATE = 0;
+import { CONFIG } from "../game/config.js";
 import { sounds } from "../game/audio.js";
 
+const { SHIP } = CONFIG;
+const ROT_SPEED = SHIP.ROT_SPEED;     // radians/sec
+const THRUST = SHIP.THRUST;
+const MAX_FUEL = SHIP.MAX_FUEL;
+const THRUST_FUEL_RATE = SHIP.THRUST_FUEL_RATE;
+const ROT_FUEL_RATE = SHIP.ROT_FUEL_RATE;
+
 const SHIP_SPRITE = new Image();
-SHIP_SPRITE.src = "assets/ui/sprites/ship.png";
-const SHIP_DRAW_SIZE = 24;
-const THRUST_LOOP_SEGMENT = 0.4;
-const THRUST_LOOP_CROSSFADE = 0.16;
-const THRUST_VISUAL = {
-  PLUME_BASE: 14,
-  PLUME_MAX: 32,
-  PLUME_SPEED: 22,
-  PLUME_WIDTH: 9,
-  KICK_DURATION: 0.14,
-  KICK_RADIUS: 10,
-  KICK_ALPHA: 0.65,
-  SHIMMER_COUNT: 3,
-  SHIMMER_LENGTH: 16,
-  SHIMMER_WIDTH: 2.6,
-  FLARE_RADIUS: 12,
-  FLARE_ALPHA: 0.25
-};
+SHIP_SPRITE.src = SHIP.SPRITE_SRC;
+const SHIP_DRAW_SIZE = SHIP.DRAW_SIZE;
+const THRUST_LOOP_SEGMENT = SHIP.THRUST_LOOP_SEGMENT;
+const THRUST_LOOP_CROSSFADE = SHIP.THRUST_LOOP_CROSSFADE;
+const THRUST_VISUAL = SHIP.THRUST_VISUAL;
 
 const keys = {};
 window.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
@@ -61,6 +51,14 @@ export class Ship {
   update(dt, input = null) {
     this.kickTimer = Math.max(0, this.kickTimer - dt);
     const prevThrust = this.thrusting;
+    const controlsDisabled = Boolean(input?.disableControls);
+    if (controlsDisabled) {
+      this.thrusting = 0;
+      this.kickTimer = 0;
+      this.stopThrustLoop();
+      this.stopRotateLoop();
+      return;
+    }
     let rotationInput = 0;
     if (keys["arrowleft"] || keys["a"]) rotationInput -= 1;
     if (keys["arrowright"] || keys["d"]) rotationInput += 1;

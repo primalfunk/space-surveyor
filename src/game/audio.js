@@ -1,15 +1,6 @@
-const SOUND_DEFS = {
-  start_game: { src: "assets/sounds/mp3/start_game.mp3", volume: 0.9 },
-  laser: { src: "assets/sounds/mp3/laser.mp3", volume: 0.375 },
-  enemy_laser: { src: "assets/sounds/mp3/laser.mp3", volume: 0.1875 },
-  explosion: { src: "assets/sounds/mp3/explosion.mp3", volume: 0.85 },
-  lost_life: { src: "assets/sounds/mp3/lost_life.mp3", volume: 0.9 },
-  got_fuel: { src: "assets/sounds/mp3/got_fuel.mp3", volume: 0.8 },
-  got_survey: { src: "assets/sounds/mp3/got_survey.mp3", volume: 0.85 },
-  game_over: { src: "assets/sounds/mp3/game_over.mp3", volume: 0.9 },
-  thrust: { src: "assets/sounds/mp3/thrust.mp3", volume: 0.7 },
-  thrust_rotate: { src: "assets/sounds/mp3/thrust.mp3", volume: 0.2 }
-};
+import { CONFIG } from "./config.js";
+
+const SOUND_DEFS = CONFIG.AUDIO.SOUNDS;
 
 class SoundManager {
   constructor(defs) {
@@ -216,12 +207,8 @@ class MusicManager {
   }
 }
 
-export const music = new MusicManager([
-  "assets/sounds/mp3/1. failed_before.mp3",
-  "assets/sounds/mp3/2. remind_me_later.mp3",
-  "assets/sounds/mp3/3. take_it_easy.mp3",
-  "assets/sounds/mp3/4. where_the_time_goes.mp3",
-  "assets/sounds/mp3/5. the_noise_in_my_head.mp3",
-  "assets/sounds/mp3/6. noonquil.mp3"
-], 0.45);
+export const music = new MusicManager(
+  CONFIG.AUDIO.MUSIC.TRACKS,
+  CONFIG.AUDIO.MUSIC.VOLUME
+);
 

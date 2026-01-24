@@ -1,39 +1,35 @@
+import { CONFIG } from "../game/config.js";
+
+const { STAR } = CONFIG;
 const STAR_SPRITES = {
   yellow: new Image(),
   red: new Image(),
   blue: new Image()
 };
-STAR_SPRITES.yellow.src = "assets/ui/sprites/yellow_star.png";
-STAR_SPRITES.red.src = "assets/ui/sprites/red_star.png";
-STAR_SPRITES.blue.src = "assets/ui/sprites/blue_star.png";
+STAR_SPRITES.yellow.src = STAR.SPRITES.yellow;
+STAR_SPRITES.red.src = STAR.SPRITES.red;
+STAR_SPRITES.blue.src = STAR.SPRITES.blue;
 
-const DEFAULTS = {
-  bodyRadius: 60,
-  bodyColor: "gold",
-  wellFill: "rgba(255, 255, 200, 0.06)",
-  wellStroke: "rgba(255, 255, 200, 0.2)",
-  minimapColor: "gold",
-  spriteKey: "yellow"
-};
+const DEFAULTS = STAR.DEFAULTS;
 
 export class Star {
   constructor(x, y, options = {}) {
     const opts = typeof options === "number" ? { mass: options } : options;
     this.x = x;
     this.y = y;
-    this.mass = opts.mass ?? 1500;
-    this.radius = opts.bodyRadius ?? DEFAULTS.bodyRadius;
-    this.bodyColor = opts.bodyColor ?? DEFAULTS.bodyColor;
-    this.wellFill = opts.wellFill ?? DEFAULTS.wellFill;
-    this.wellStroke = opts.wellStroke ?? DEFAULTS.wellStroke;
-    this.minimapColor = opts.minimapColor ?? DEFAULTS.minimapColor;
-    this.spriteKey = opts.spriteKey ?? DEFAULTS.spriteKey;
-    this.gravityRadius = opts.gravityRadius ?? (this.radius * 6);
+    this.mass = opts.mass ?? DEFAULTS.MASS;
+    this.radius = opts.bodyRadius ?? DEFAULTS.BODY_RADIUS;
+    this.bodyColor = opts.bodyColor ?? DEFAULTS.BODY_COLOR;
+    this.wellFill = opts.wellFill ?? DEFAULTS.WELL_FILL;
+    this.wellStroke = opts.wellStroke ?? DEFAULTS.WELL_STROKE;
+    this.minimapColor = opts.minimapColor ?? DEFAULTS.MINIMAP_COLOR;
+    this.spriteKey = opts.spriteKey ?? DEFAULTS.SPRITE_KEY;
+    this.gravityRadius = opts.gravityRadius ?? (this.radius * DEFAULTS.GRAVITY_RADIUS_MULTIPLIER);
     this.rotation = opts.rotation ?? 0;
     this.rotationSpeed = opts.rotationSpeed ?? 0;
     this.pulsePhase = opts.pulsePhase ?? Math.random() * Math.PI * 2;
-    this.pulseSpeed = opts.pulseSpeed ?? 1.0;
-    this.pulseAmount = opts.pulseAmount ?? 0.06;
+    this.pulseSpeed = opts.pulseSpeed ?? DEFAULTS.PULSE_SPEED;
+    this.pulseAmount = opts.pulseAmount ?? DEFAULTS.PULSE_AMOUNT;
     this.pulseScale = 1;
   }
 

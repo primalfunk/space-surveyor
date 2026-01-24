@@ -25,6 +25,7 @@ Space Surveyor is a retro-inspired space exploration and combat game. Pilot a su
 - Zoom: Z (out), X (in)
 - Quit when stranded: Q (when out of fuel)
 - Return to start: Esc
+- Start screen: Space to continue, Shift+Space to reset world
 
 ## Scoring
 
