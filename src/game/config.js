@@ -35,7 +35,18 @@ const GAMEPLAY = {
   STARTING_LIVES: 3,
   INVULN_DURATION: 1.25,
   GAME_OVER_DELAY: 0.7,
-  RESPAWN_DELAY: 0.6
+  RESPAWN_DELAY: 0.6,
+  INTRO: {
+    ALERT_DURATION: 3,
+    START_DELAY: 1.2,
+    SCORE_TIMEOUT: 10,
+    FUEL_RATIO: 0.8,
+    LONGRUN_TRANSITIONS: 2,
+    STAR_PULL_ACCEL: 60,
+    HIGHLIGHT_DURATION: 1.4,
+    VIGNETTE_DURATION: 1.6,
+    RIVER_HIGHLIGHT_DURATION: 1.4
+  }
 };
 
 // Scoring values and popup styling.
@@ -64,6 +75,56 @@ const SCORE = {
     chain: "rgba(120, 220, 255, 0.95)",
     gate: "rgba(170, 210, 220, 0.95)",
     generic: "rgba(230, 240, 240, 0.95)"
+  }
+};
+
+// Resource pickups dropped by asteroids.
+const RESOURCE = {
+  DROP_CHANCE: 0.5,
+  DROP_BASE_VALUE: 8,
+  CHILD_VALUE_DECAY: 0.6,
+  MIN_DROP_VALUE: 1,
+  PICKUP_RADIUS: 18,
+  SPRITE_SRC: "assets/ui/sprites/money.png",
+  HUD_ICON_SIZE: 14,
+  TTL_MS: 30000
+};
+
+// Upgrade economy and effects.
+const UPGRADES = {
+  FIRE_RATE: {
+    levelMax: 10,
+    baseCost: 30,
+    costMult: 1.45,
+    effect: {
+      cooldownMsBase: 260,
+      cooldownMsMin: 90
+    }
+  },
+  HULL: {
+    levelMax: 10,
+    baseCost: 25,
+    costMult: 1.42,
+    effect: {
+      maxLivesBase: GAMEPLAY.STARTING_LIVES,
+      livesPerLevel: 1
+    }
+  },
+  COLLECTOR: {
+    levelMax: 10,
+    baseCost: 20,
+    costMult: 1.4,
+    effect: {
+      radiusBase: 0,
+      radiusPerLevel: 28,
+      pullStrengthBase: 0,
+      pullStrengthPerLevel: 0.015,
+      pullStrengthMax: 0.2
+    }
+  },
+  REPAIR: {
+    baseCost: 12,
+    costPerLife: 8
   }
 };
 
@@ -130,6 +191,29 @@ const CALIBRATION = {
       SHUTDOWN_GATE: 2.0
     }
   }
+};
+
+// Upgrade station placement and safe zone rules.
+const STATION = {
+  SPRITE_SRC: "assets/ui/sprites/upgrade_station.png",
+  SAFE_ZONE_RADIUS: 140,
+  COLLIDER_RADIUS: 50,
+  SPRITE_SCALE: 2,
+  WAVE_PERIOD: 2.4,
+  WAVE_EXPAND_RATIO: 0.2,
+  WAVE_ALPHA: 0.22,
+  DOCK_RADIUS: 65,
+  DOCK_PULL_STRENGTH: 0.09,
+  DOCK_DAMPING: 0.9,
+  RIVER_NEGATION_RADIUS: 140,
+  ENEMY_REPEL_RADIUS: 160,
+  ENEMY_REPEL_STRENGTH: 0.12,
+  SCAN_RANGE_CELLS: 5,
+  UNIQUE_GRID_SIZE: 5,
+  START_STATION_TIER_CAP: 3,
+  MARKER_EDGE_INDICATOR: true,
+  PLACEMENT_CHANCE_BASE: 0.05,
+  PLACEMENT_CHANCE_RING_SCALE: 0.015
 };
 
 // Background layers and transient events.
@@ -242,6 +326,77 @@ const INPUT = {
   }
 };
 
+// Autopilot behavior and HUD toggle.
+  const AUTOPILOT = {
+    DEMO_SEED: 1357913579,
+    BUTTON: {
+      WIDTH: 140,
+      HEIGHT: 34,
+      Y_OFFSET: 22
+    },
+    SPEED_MAX: 200,
+    COURSE: {
+      LOOKAHEAD_DIST: 1200,
+      LOOKAHEAD_TIME_MAX: 5,
+      CORRIDOR_RADIUS: 40,
+      AVOID_ANGLE_DEG: 16
+    },
+    COLORS: {
+      ON_FILL: "rgba(120, 210, 190, 0.35)",
+      OFF_FILL: "rgba(40, 60, 70, 0.25)",
+      BORDER: "rgba(170, 210, 220, 0.7)",
+      ON_TEXT: "rgba(220, 250, 240, 0.95)",
+    OFF_TEXT: "rgba(140, 170, 180, 0.7)",
+    GLOW: "rgba(120, 220, 190, 0.6)"
+  },
+  ALERTS: {
+    ENGAGED: "AUTOPILOT ENGAGED",
+    DISENGAGED: "AUTOPILOT DISENGAGED"
+  },
+  FIRE: {
+    CONE_DEG: 25,
+    RANGE_MULT: 0.9,
+    PAUSE_MIN: 0.15,
+    PAUSE_MAX: 0.35,
+    HAZARD_CLEAR_DIST: 220
+  },
+    FUEL: {
+      HIGH: 0.6,
+      MID: 0.3,
+      CRITICAL: 0.15
+    },
+    AVOID: {
+      STAR_BODY_BUFFER: 40,
+      ASTEROID_BODY_BUFFER: 30,
+      STATION_BUFFER: 80,
+      BEACON_BUFFER: 140
+    },
+    TARGET: {
+      FUEL_RANGE: 1200,
+      FUEL_ANGLE_DEG: 40,
+      BRAKE_DISTANCE: 260,
+      THRUST_ANGLE_DEG: 50
+    },
+    THRUST: {
+      CRUISE_SPEED: 200,
+      SPEED_FLOOR: 130,
+      COAST_TIME: 1.6,
+      BURST_MIN: 0.25,
+      BURST_COOLDOWN: 0,
+      ALIGN_POWER: 1.6,
+      MIN_POWER: 0.35
+    },
+    GRAVITY: {
+      COMPENSATION: 0.7,
+      MAX_BLEND: 0.6,
+      THRUST_RATIO: 0.6,
+      CLOSE_PUSH: 0.9
+    },
+    RIVER: {
+      ALIGN_DOT_MIN: 0.45
+    }
+  };
+
 // HUD look and feel.
 const HUD = {
   FONT: "'Orbitron', 'Bank Gothic', 'Eurostile', 'Consolas', monospace",
@@ -296,13 +451,24 @@ const HUD = {
     DANGER_DRIFT_SPEED: 0.006,
     FUEL_MAX_DOTS: 3
   },
-  SCAN_PULSE: {
-    PERIOD: 2400,
-    RADIUS_MIN: 16,
-    RADIUS_MAX: 160,
-    LINE_WIDTH: 2
-  }
-};
+    SCAN_PULSE: {
+      PERIOD: 2400,
+      RADIUS_MIN: 16,
+      RADIUS_MAX: 160,
+      LINE_WIDTH: 2
+    },
+    STATUS: {
+      PANEL_WIDTH: 230,
+      PANEL_WIDTH_COMPACT: 200,
+      ROW_HEIGHT: 24,
+      ROW_HEIGHT_COMPACT: 19,
+      ICON_SIZE: 16,
+      ICON_SIZE_COMPACT: 13,
+      VALUE_FONT: 16,
+      VALUE_FONT_COMPACT: 13,
+      VALUE_GLOW: 10
+    }
+  };
 
 // UI-specific endpoints and thresholds.
 const UI = {
@@ -384,7 +550,8 @@ const PICKUPS = {
     WIDTH: 12,
     HEIGHT: 24,
     RADIUS: 14,
-    DROP_CHANCE: 1 / 3,
+    DROP_CHANCE: 1 / 4,
+    TTL_MS: 30000,
     ROT_SPEED_MIN: 0.5,
     ROT_SPEED_MAX: 1.1,
     SPRITE_SRC: "assets/ui/sprites/fuel.png"
@@ -478,7 +645,7 @@ const STAR = {
     WELL_STROKE: "rgba(255, 255, 200, 0.2)",
     MINIMAP_COLOR: "gold",
     SPRITE_KEY: "yellow",
-    GRAVITY_RADIUS_MULTIPLIER: 6,
+    GRAVITY_RADIUS_MULTIPLIER: 3,
     PULSE_SPEED: 1.0,
     PULSE_AMOUNT: 0.06
   },
@@ -628,7 +795,7 @@ const RIVER = {
       ENABLED: true,
       RATE: 0.18,
       WAVELENGTH: 220,
-      STRENGTH: 0.28,
+      STRENGTH: 0.6,
       HUE_SHIFT: 0.18
     },
     OUTER_ALPHA: 0.06,
@@ -675,7 +842,8 @@ const SECTOR = {
     PATTERN: 955,
     FIELD: 1001,
     RIVER: 1111,
-    ANCHOR: 1222
+    ANCHOR: 1222,
+    STATION: 1333
   },
   ZONES: {
     start: { id: "start", asteroidMultiplier: 0.5 },
@@ -728,10 +896,13 @@ const AUDIO = {
   SOUNDS: {
     start_game: { src: "assets/sounds/mp3/start_game.mp3", volume: 0.9 },
     laser: { src: "assets/sounds/mp3/laser.mp3", volume: 0.13 },
-    enemy_laser: { src: "assets/sounds/mp3/laser.mp3", volume: 0.09 },
+    enemy_laser: { src: "assets/sounds/mp3/laser.mp3", volume: 0.06},
     explosion: { src: "assets/sounds/mp3/explosion.mp3", volume: 0.75 },
     lost_life: { src: "assets/sounds/mp3/lost_life.mp3", volume: 0.9 },
     got_fuel: { src: "assets/sounds/mp3/got_fuel.mp3", volume: 0.8 },
+    got_money: { src: "assets/sounds/mp3/got_money.mp3", volume: 0.85 },
+    bought: { src: "assets/sounds/mp3/bought.mp3", volume: 0.85 },
+    at_station: { src: "assets/sounds/mp3/at_station.mp3", volume: 0.45 },
     got_gate: { src: "assets/sounds/mp3/got_gate.mp3", volume: 1 },
     got_survey: { src: "assets/sounds/mp3/got_survey.mp3", volume: 0.7 },
     game_over: { src: "assets/sounds/mp3/game_over.mp3", volume: 0.6 },
@@ -757,11 +928,15 @@ export const CONFIG = {
   CAMERA,
   GAMEPLAY,
   SCORE,
+  RESOURCE,
+  UPGRADES,
   BEACON,
   CALIBRATION,
+  STATION,
   BACKGROUND,
   EFFECTS,
   INPUT,
+  AUTOPILOT,
   HUD,
   UI,
   PHYSICS,

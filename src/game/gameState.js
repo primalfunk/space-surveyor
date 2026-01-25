@@ -1,6 +1,7 @@
 import { CONFIG } from "./config.js";
 
 const GAME_STATE_KEY = CONFIG.STORAGE.GAME_STATE_KEY;
+const { UPGRADES } = CONFIG;
 
 function generateSeed() {
   return Math.floor(Math.random() * 0xffffffff);
@@ -12,6 +13,13 @@ function isPlainObject(value) {
 
 function clampNumber(value, fallback = 0) {
   return Number.isFinite(value) ? value : fallback;
+}
+
+function clampLevel(value, maxLevel) {
+  if (!Number.isFinite(maxLevel)) {
+    return Math.max(0, Math.floor(clampNumber(value, 0)));
+  }
+  return Math.max(0, Math.min(maxLevel, Math.floor(clampNumber(value, 0))));
 }
 
 function ensureArray(value) {
@@ -32,6 +40,12 @@ export function createDefaultGameState(seed = generateSeed()) {
       recentSectors: [],
       recentSurveys: [],
       recentBeaconVisits: []
+    },
+    resourceCurrency: 0,
+    upgrades: {
+      fireRateLevel: 0,
+      hullLevel: 0,
+      collectorLevel: 0
     },
     furthestRing: 0,
     newSectorCount: 0,
@@ -64,6 +78,13 @@ export function normalizeGameState(raw) {
   base.history.recentSectors = ensureArray(historyRaw.recentSectors);
   base.history.recentSurveys = ensureArray(historyRaw.recentSurveys);
   base.history.recentBeaconVisits = ensureArray(historyRaw.recentBeaconVisits);
+
+  base.resourceCurrency = Math.max(0, Math.floor(clampNumber(raw.resourceCurrency, 0)));
+  if (isPlainObject(raw.upgrades)) {
+    base.upgrades.fireRateLevel = clampLevel(raw.upgrades.fireRateLevel, UPGRADES.FIRE_RATE.levelMax);
+    base.upgrades.hullLevel = clampLevel(raw.upgrades.hullLevel, UPGRADES.HULL.levelMax);
+    base.upgrades.collectorLevel = clampLevel(raw.upgrades.collectorLevel, UPGRADES.COLLECTOR.levelMax);
+  }
 
   base.furthestRing = Math.max(0, Math.floor(clampNumber(raw.furthestRing, 0)));
   base.newSectorCount = Math.max(0, Math.floor(clampNumber(raw.newSectorCount, 0)));

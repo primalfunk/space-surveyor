@@ -203,7 +203,7 @@ function anchorHuePhase(anchorId, worldAgeTicks) {
   return base + worldAgeTicks * 0.01;
 }
 
-export function drawRivers(ctx, rivers, viewRect, worldAgeTicks, activeStars = [], timeSeconds = null) {
+export function drawRivers(ctx, rivers, viewRect, worldAgeTicks, activeStars = [], timeSeconds = null, highlight = 0) {
   if (!Array.isArray(rivers) || rivers.length === 0) {
     return;
   }
@@ -231,8 +231,10 @@ export function drawRivers(ctx, rivers, viewRect, worldAgeTicks, activeStars = [
     const phase = (river.backboneId % 1024) * 0.005 + worldAgeTicks * shimmerRate;
     const wavePhase = (river.backboneId % 2048) * 0.003;
     const waveTime = Number.isFinite(timeSeconds) ? timeSeconds : worldAgeTicks;
-    const pulse = 1 - (wave.PULSE_AMOUNT ?? 0) * 0.5
+    const basePulse = 1 - (wave.PULSE_AMOUNT ?? 0) * 0.5
       + Math.sin(waveTime * (wave.PULSE_RATE ?? 0.35) + phase) * (wave.PULSE_AMOUNT ?? 0);
+    const pulseBoost = 1 + Math.max(0, Math.min(1, highlight)) * 0.5;
+    const pulse = clampValue(basePulse * pulseBoost, 0, 2.2);
     const cacheTick = Math.floor(waveTime);
     if (!river._renderCache || river._renderCache.tick !== cacheTick) {
       const undulated = buildUndulatedPoints(river.points, cacheTick, wave, wavePhase);

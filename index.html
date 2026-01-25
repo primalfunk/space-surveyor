@@ -42,6 +42,9 @@
       background: var(--ui-overlay);
       overflow: hidden;
     }
+    .start-screen {
+      pointer-events: none;
+    }
     button {
       font-size: 20px;
       padding: 14px 28px;
@@ -57,6 +60,7 @@
       flex-direction: column;
       align-items: center;
       gap: 26px;
+      pointer-events: auto;
     }
     .start-title {
       font-size: 64px;
@@ -444,12 +448,81 @@
       color: var(--ui-warm);
       letter-spacing: 2px;
     }
-    .leaderboard-row.is-new {
-      background: rgba(120, 200, 190, 0.12);
-      border: 1px solid rgba(120, 200, 190, 0.4);
-      box-shadow: 0 0 12px rgba(120, 200, 190, 0.4);
-      animation: new-score-pulse 1.1s ease-in-out infinite;
-    }
+      .leaderboard-row.is-new {
+        background: rgba(120, 200, 190, 0.12);
+        border: 1px solid rgba(120, 200, 190, 0.4);
+        box-shadow: 0 0 12px rgba(120, 200, 190, 0.4);
+        animation: new-score-pulse 1.1s ease-in-out infinite;
+      }
+      .upgrade-panel {
+        width: min(520px, 86vw);
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 22px 26px;
+        border: 2px solid var(--ui-line-strong);
+        background: var(--ui-panel-strong);
+      }
+      .upgrade-title {
+        font-size: 28px;
+        letter-spacing: 3px;
+        color: var(--ui-accent);
+        text-transform: uppercase;
+      }
+      .upgrade-currency,
+      .upgrade-tier {
+        font-size: 13px;
+        letter-spacing: 1px;
+        color: var(--ui-muted);
+      }
+      .upgrade-list {
+        display: grid;
+        gap: 10px;
+      }
+      .upgrade-row {
+        display: grid;
+        grid-template-columns: 1.4fr 0.7fr 0.5fr auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 12px;
+        border: 1px solid var(--ui-line);
+        background: var(--ui-panel);
+      }
+      .upgrade-name {
+        font-size: 14px;
+        color: var(--ui-text);
+      }
+      .upgrade-level {
+        font-size: 12px;
+        letter-spacing: 1px;
+        color: var(--ui-muted);
+      }
+      .upgrade-cost {
+        font-size: 13px;
+        color: var(--ui-warm);
+        text-align: right;
+      }
+      .upgrade-button {
+        font-size: 12px;
+        padding: 6px 12px;
+        letter-spacing: 1px;
+      }
+      .upgrade-button:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+      .interact-button {
+        position: absolute;
+        right: 18px;
+        bottom: 120px;
+        font-size: 12px;
+        padding: 10px 16px;
+        letter-spacing: 2px;
+        border-radius: 999px;
+        background: rgba(8, 12, 16, 0.7);
+        border: 1px solid var(--ui-line-strong);
+        color: var(--ui-text);
+      }
     .score-entry {
       width: 100%;
       padding: 12px 14px;

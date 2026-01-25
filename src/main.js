@@ -16,6 +16,7 @@ resize();
 
 const uiRoot = document.getElementById("ui-root");
 let gameController = null;
+let demoController = null;
 let escListener = null;
 let gameState = loadGameState();
 let sectorIndex = loadSectorIndex();
@@ -25,7 +26,31 @@ function resetWorld() {
   sectorIndex = resetSectorIndex();
 }
 
+function stopDemo() {
+  if (demoController && typeof demoController.exitToMenu === "function") {
+    demoController.exitToMenu();
+  }
+  demoController = null;
+}
+
+function startDemo() {
+  stopDemo();
+  demoController = startGame(canvas, ctx, uiRoot, null, null, null, {
+    demoMode: true,
+    autopilotDefault: true
+  });
+}
+
+function showStartScreenWithDemo() {
+  startDemo();
+  showStartScreen(uiRoot, () => {
+    stopDemo();
+    beginGame();
+  }, resetWorld);
+}
+
 function beginGame() {
+  stopDemo();
   if (escListener) {
     window.removeEventListener("keydown", escListener);
     escListener = null;
@@ -37,7 +62,7 @@ function beginGame() {
     }
     gameController = null;
     showGameOverModal(uiRoot, stats, () => {
-      showStartScreen(uiRoot, beginGame, resetWorld);
+      showStartScreenWithDemo();
     });
   });
 
@@ -58,10 +83,10 @@ function beginGame() {
     if (typeof controller.exitToMenu === "function") {
       controller.exitToMenu();
     }
-    showStartScreen(uiRoot, beginGame, resetWorld);
+    showStartScreenWithDemo();
   };
   window.addEventListener("keydown", escListener);
 }
 
-showStartScreen(uiRoot, beginGame, resetWorld);
+showStartScreenWithDemo();
 

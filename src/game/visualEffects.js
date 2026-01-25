@@ -280,7 +280,7 @@ export function drawBackgroundEvents(ctx, events, clock, ship, screenW, screenH)
   }
 }
 
-export function drawScreenEffects(ctx, screenW, screenH) {
+export function drawScreenEffects(ctx, screenW, screenH, vignettePulse = 0) {
   const centerX = screenW / 2;
   const centerY = screenH / 2;
   const maxRadius = Math.max(screenW, screenH) * 0.6;
@@ -302,6 +302,19 @@ export function drawScreenEffects(ctx, screenW, screenH) {
   ctx.fillStyle = vignette;
   ctx.fillRect(0, 0, screenW, screenH);
   ctx.restore();
+
+  if (vignettePulse > 0) {
+    const alpha = Math.min(1, vignettePulse) * 0.25;
+    const pulse = 0.6 + 0.4 * Math.sin(performance.now() * 0.005);
+    ctx.save();
+    ctx.globalAlpha = alpha * pulse;
+    const pulseGrad = ctx.createRadialGradient(centerX, centerY, minRadius * 0.7, centerX, centerY, maxRadius);
+    pulseGrad.addColorStop(0, "rgba(0, 0, 0, 0)");
+    pulseGrad.addColorStop(1, "rgba(0, 0, 0, 0.55)");
+    ctx.fillStyle = pulseGrad;
+    ctx.fillRect(0, 0, screenW, screenH);
+    ctx.restore();
+  }
 }
 
 export function drawControlDisableOverlay(ctx, canvas, camera, remaining, shipRadius) {

@@ -7,14 +7,134 @@ const {
   MINIMAP,
   COMPASS,
   BEARING,
-  SCAN_PULSE
+  SCAN_PULSE,
+  STATUS
 } = CONFIG.HUD;
+const { STATION, AUTOPILOT } = CONFIG;
 
 function normalizeAngle(angle) {
   return ((angle + Math.PI) % (Math.PI * 2)) - Math.PI;
 }
 
-export function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, screenW, screenH, isCompact, anomalyEffects = null) {
+function drawHudFrame(ctx, x, y, width, height, options = {}) {
+  const notch = options.notch ?? 12;
+  const fillStart = options.fillStart ?? HUD_COLORS.PANEL_START;
+  const fillEnd = options.fillEnd ?? HUD_COLORS.PANEL_END;
+  const stroke = options.stroke ?? HUD_COLORS.PANEL_STROKE;
+  const glow = options.glow ?? HUD_COLORS.ACCENT_GLOW;
+  const glowBlur = options.glowBlur ?? 10;
+  const fill = options.fill !== false;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(x + notch, y);
+  ctx.lineTo(x + width, y);
+  ctx.lineTo(x + width - notch, y + height);
+  ctx.lineTo(x, y + height);
+  ctx.closePath();
+  if (fill) {
+    const grad = ctx.createLinearGradient(x, y, x + width, y + height);
+    grad.addColorStop(0, fillStart);
+    grad.addColorStop(1, fillEnd);
+    ctx.fillStyle = grad;
+    ctx.shadowColor = glow;
+    ctx.shadowBlur = glowBlur;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+  ctx.shadowColor = glow;
+  ctx.shadowBlur = glowBlur * 0.55;
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawHudTick(ctx, x, y, width, inset = 10) {
+  ctx.save();
+  ctx.strokeStyle = HUD_COLORS.PANEL_TICK;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x + inset, y);
+  ctx.lineTo(x + width - inset, y);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawStatIcon(ctx, type, x, y, size, color, glow) {
+  const s = size;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = Math.max(1.5, s * 0.12);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.shadowColor = glow;
+  ctx.shadowBlur = s * 0.7;
+
+  if (type === "ship") {
+    ctx.beginPath();
+    ctx.moveTo(0, -s * 0.7);
+    ctx.lineTo(s * 0.55, s * 0.7);
+    ctx.lineTo(0, s * 0.35);
+    ctx.lineTo(-s * 0.55, s * 0.7);
+    ctx.closePath();
+    ctx.stroke();
+  } else if (type === "time") {
+    ctx.beginPath();
+    ctx.arc(0, 0, s * 0.6, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, -s * 0.3);
+    ctx.moveTo(0, 0);
+    ctx.lineTo(s * 0.25, 0);
+    ctx.stroke();
+  } else if (type === "survey") {
+    ctx.beginPath();
+    ctx.arc(0, 0, s * 0.6, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(0, 0, s * 0.35, -Math.PI * 0.3, Math.PI * 0.3);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(s * 0.35, -s * 0.1, s * 0.08, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (type === "distance") {
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.7, 0);
+    ctx.lineTo(s * 0.7, 0);
+    ctx.stroke();
+    const ticks = [-0.4, -0.1, 0.2, 0.5];
+    for (const t of ticks) {
+      ctx.beginPath();
+      ctx.moveTo(s * t, -s * 0.2);
+      ctx.lineTo(s * t, s * 0.2);
+      ctx.stroke();
+    }
+  } else if (type === "resource") {
+    ctx.beginPath();
+    ctx.arc(0, 0, s * 0.58, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.2, -s * 0.35);
+    ctx.lineTo(-s * 0.2, s * 0.35);
+    ctx.stroke();
+  } else if (type === "speed") {
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.7, 0);
+    ctx.lineTo(s * 0.4, 0);
+    ctx.lineTo(s * 0.15, -s * 0.3);
+    ctx.moveTo(s * 0.4, 0);
+    ctx.lineTo(s * 0.15, s * 0.3);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+export function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, stations, screenW, screenH, isCompact, anomalyEffects = null, highlights = null) {
   if (!activeSectors || activeSectors.length === 0) {
     return;
   }
@@ -31,15 +151,21 @@ export function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings
   const y0 = edge;
   const cx = x0 + size / 2;
   const cy = y0 + size / 2;
+  const goalHighlight = highlights?.goal ?? 0;
+  const exitHighlight = highlights?.exit ?? 0;
+  const pulse = 0.6 + 0.4 * Math.sin(performance.now() * 0.006);
 
   ctx.save();
 
   // background
   ctx.fillStyle = HUD_COLORS.MAP_BG;
   ctx.fillRect(x0, y0, size, size);
-
-  ctx.strokeStyle = HUD_COLORS.PANEL_STROKE;
-  ctx.strokeRect(x0, y0, size, size);
+  drawHudFrame(ctx, x0, y0, size, size, {
+    fill: false,
+    notch: isCompact ? 12 : 16,
+    glowBlur: 10
+  });
+  drawHudTick(ctx, x0, y0 + 8, size);
 
   // completed sector background tint
   for (const sector of activeSectors) {
@@ -110,6 +236,32 @@ export function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings
     }
   }
 
+  // upgrade stations
+  if (Array.isArray(stations)) {
+    for (const station of stations) {
+      const dx = station.x - ship.x;
+      const dy = station.y - ship.y;
+      if (Math.abs(dx) > range || Math.abs(dy) > range) {
+        continue;
+      }
+      const mx = cx + (dx / range) * (size / 2);
+      const my = cy + (dy / range) * (size / 2);
+      ctx.save();
+      ctx.fillStyle = "rgba(120, 220, 180, 0.95)";
+      ctx.strokeStyle = "rgba(200, 255, 230, 0.9)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(mx, my - 5);
+      ctx.lineTo(mx + 4, my);
+      ctx.lineTo(mx, my + 5);
+      ctx.lineTo(mx - 4, my);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
   // enemies
   if (enemiesInRange && enemiesInRange.length > 0) {
     for (const enemy of enemiesInRange) {
@@ -138,6 +290,12 @@ export function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings
         ctx.strokeStyle = "rgba(120, 200, 190, 0.8)";
         ctx.lineWidth = 2;
         ctx.strokeRect(zx - 5, zy - 5, 10, 10);
+        if (exitHighlight > 0) {
+          const alpha = Math.min(1, exitHighlight) * (0.35 + 0.35 * pulse);
+          ctx.strokeStyle = `rgba(160, 230, 220, ${alpha})`;
+          ctx.lineWidth = 2.5;
+          ctx.strokeRect(zx - 8, zy - 8, 16, 16);
+        }
       }
     }
 
@@ -151,6 +309,14 @@ export function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings
         ctx.beginPath();
         ctx.arc(gx, gy, 3, 0, Math.PI * 2);
         ctx.fill();
+        if (goalHighlight > 0) {
+          const alpha = Math.min(1, goalHighlight) * (0.35 + 0.35 * pulse);
+          ctx.strokeStyle = `rgba(160, 230, 220, ${alpha})`;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(gx, gy, 6 + 2 * pulse, 0, Math.PI * 2);
+          ctx.stroke();
+        }
       }
     }
   }
@@ -389,7 +555,50 @@ export function drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, ene
   }
 }
 
-export function drawFuelGauge(ctx, ship, screenW, screenH, isCompact) {
+export function drawStationIndicators(ctx, ship, stations, screenW, screenH, camera) {
+  if (!STATION.MARKER_EDGE_INDICATOR || !Array.isArray(stations) || stations.length === 0) {
+    return;
+  }
+  const centerX = screenW / 2;
+  const centerY = screenH / 2;
+  const margin = 26;
+  const halfW = screenW / 2 - margin;
+  const halfH = screenH / 2 - margin;
+  for (const station of stations) {
+    const sx = (station.x - ship.x) * camera.zoom + centerX + (camera.shakeX ?? 0);
+    const sy = (station.y - ship.y) * camera.zoom + centerY + (camera.shakeY ?? 0);
+    if (sx >= 0 && sx <= screenW && sy >= 0 && sy <= screenH) {
+      continue;
+    }
+    const dx = sx - centerX;
+    const dy = sy - centerY;
+    const angle = Math.atan2(dy, dx);
+    const dirX = Math.cos(angle);
+    const dirY = Math.sin(angle);
+    const tx = Math.abs(dirX) > 0.0001 ? halfW / Math.abs(dirX) : halfW;
+    const ty = Math.abs(dirY) > 0.0001 ? halfH / Math.abs(dirY) : halfH;
+    const t = Math.min(tx, ty);
+    const x = centerX + dirX * t;
+    const y = centerY + dirY * t;
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.fillStyle = "rgba(120, 220, 180, 0.9)";
+    ctx.strokeStyle = "rgba(200, 255, 230, 0.85)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(-10, -6);
+    ctx.lineTo(-10, 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+export function drawFuelGauge(ctx, ship, screenW, screenH, isCompact, highlight = 0) {
   const edge = isCompact ? 12 : 20;
   const panelW = Math.min(isCompact ? 260 : 320, screenW - edge * 2);
   const panelH = isCompact ? 70 : 78;
@@ -405,21 +614,20 @@ export function drawFuelGauge(ctx, ship, screenW, screenH, isCompact) {
   const fuelValue = Math.max(0, ship.fuel).toFixed(1);
 
   ctx.save();
-  const panelGrad = ctx.createLinearGradient(x, y, x + panelW, y + panelH);
-  panelGrad.addColorStop(0, HUD_COLORS.PANEL_START);
-  panelGrad.addColorStop(1, HUD_COLORS.PANEL_END);
+  drawHudFrame(ctx, x, y, panelW, panelH, { notch: isCompact ? 12 : 16, glowBlur: 10 });
+  drawHudTick(ctx, x, y + 8, panelW);
 
-  ctx.beginPath();
-  ctx.moveTo(x + 16, y);
-  ctx.lineTo(x + panelW, y);
-  ctx.lineTo(x + panelW - 12, y + panelH);
-  ctx.lineTo(x, y + panelH);
-  ctx.closePath();
-  ctx.fillStyle = panelGrad;
-  ctx.fill();
-  ctx.strokeStyle = HUD_COLORS.PANEL_STROKE;
-  ctx.lineWidth = 2;
-  ctx.stroke();
+  if (highlight > 0) {
+    const alpha = Math.min(1, highlight) * 0.4;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.strokeStyle = `rgba(170, 230, 210, ${alpha})`;
+    ctx.shadowColor = "rgba(120, 220, 190, 0.7)";
+    ctx.shadowBlur = 18;
+    ctx.lineWidth = 2.5;
+    ctx.strokeRect(x + 4, y + 4, panelW - 8, panelH - 8);
+    ctx.restore();
+  }
 
   ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
   ctx.fillRect(barX - 2, barY - 2, barW + 4, barH + 4);
@@ -451,90 +659,94 @@ export function drawFuelGauge(ctx, ship, screenW, screenH, isCompact) {
   ctx.restore();
 }
 
-export function drawStatusHud(ctx, ship, lives, surveyed, timeSpent, screenW, screenH, controlLabel = "", isCompact = false) {
+export function drawStatusHud(ctx, ship, lives, surveyed, timeSpent, distanceFromOrigin, resourceCurrency, screenW, screenH, controlLabel = "", isCompact = false) {
   const speed = Math.hypot(ship.vx, ship.vy);
-  let headingDeg = (ship.heading * 180) / Math.PI;
-  headingDeg = ((headingDeg % 360) + 360) % 360;
+  const distance = Number.isFinite(distanceFromOrigin) ? distanceFromOrigin : 0;
+  const resource = Number.isFinite(resourceCurrency) ? Math.max(0, Math.floor(resourceCurrency)) : 0;
   const edge = isCompact ? 12 : 18;
-  const labels = isCompact
-    ? {
-      lives: "LIV",
-      surveyed: "SURV",
-      time: "TIME",
-      speed: "SPD",
-      heading: "HDG"
-    }
-    : {
-      lives: "LIVES",
-      surveyed: "SURVEYED",
-      time: "TIME",
-      speed: "SPEED",
-      heading: "HEADING"
-    };
   const lines = [
-    { label: labels.lives, value: lives },
-    { label: labels.surveyed, value: surveyed },
-    { label: labels.time, value: `${timeSpent.toFixed(1)}s` },
-    { label: labels.speed, value: speed.toFixed(1) },
-    { label: labels.heading, value: `${headingDeg.toFixed(0)}deg` }
+    { icon: "ship", value: lives },
+    { icon: "survey", value: surveyed },
+    { icon: "time", value: `${timeSpent.toFixed(1)}s` },
+    { icon: "distance", value: `${distance.toFixed(0)}u` },
+    { icon: "resource", value: resource },
+    { icon: "speed", value: speed.toFixed(1) }
   ];
   const showControls = !isCompact && controlLabel;
-  const lineH = isCompact ? 16 : 18;
+  const lineH = isCompact ? STATUS.ROW_HEIGHT_COMPACT : STATUS.ROW_HEIGHT;
   const basePad = isCompact ? 12 : 16;
-  const panelW = Math.min(isCompact ? 240 : 280, screenW - edge * 2);
+  const panelW = Math.min(
+    isCompact ? STATUS.PANEL_WIDTH_COMPACT : STATUS.PANEL_WIDTH,
+    screenW - edge * 2
+  );
   const panelH = basePad * 2 + lineH * lines.length + (showControls ? lineH : 0);
   const x = edge;
   const y = edge;
+  const iconSize = isCompact ? STATUS.ICON_SIZE_COMPACT : STATUS.ICON_SIZE;
+  const valueFont = isCompact ? STATUS.VALUE_FONT_COMPACT : STATUS.VALUE_FONT;
 
   ctx.save();
-  const panelGrad = ctx.createLinearGradient(x, y, x + panelW, y + panelH);
-  panelGrad.addColorStop(0, HUD_COLORS.PANEL_START);
-  panelGrad.addColorStop(1, HUD_COLORS.PANEL_END);
+  drawHudFrame(ctx, x, y, panelW, panelH, { notch: isCompact ? 12 : 16, glowBlur: 12 });
+  drawHudTick(ctx, x, y + 8, panelW);
 
-  ctx.beginPath();
-  ctx.moveTo(x + 14, y);
-  ctx.lineTo(x + panelW, y);
-  ctx.lineTo(x + panelW - 12, y + panelH);
-  ctx.lineTo(x, y + panelH);
-  ctx.closePath();
-  ctx.fillStyle = panelGrad;
-  ctx.fill();
-  ctx.strokeStyle = HUD_COLORS.PANEL_STROKE;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  ctx.strokeStyle = HUD_COLORS.PANEL_TICK;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(x + 10, y + 8);
-  ctx.lineTo(x + panelW - 10, y + 8);
-  ctx.stroke();
-
-  const labelX = x + 16;
-  const valueX = x + panelW - 14;
-  let cursorY = y + basePad + lineH - 4;
+  const iconX = x + basePad + iconSize * 0.4;
+  const valueX = x + panelW - basePad;
+  let cursorY = y + basePad + lineH * 0.5;
   for (const line of lines) {
-    ctx.textAlign = "left";
-    ctx.fillStyle = HUD_COLORS.PANEL_MUTED;
-    ctx.font = `${isCompact ? 11 : 12}px ${HUD_FONT}`;
-    ctx.fillText(line.label, labelX, cursorY);
+    drawStatIcon(ctx, line.icon, iconX, cursorY, iconSize, HUD_COLORS.ACCENT, HUD_COLORS.ACCENT_GLOW);
     ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
     ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
-    ctx.font = `${isCompact ? 14 : 16}px ${HUD_FONT}`;
+    ctx.font = `bold ${valueFont}px ${HUD_FONT}`;
+    ctx.shadowColor = HUD_COLORS.ACCENT_GLOW;
+    ctx.shadowBlur = STATUS.VALUE_GLOW;
     ctx.fillText(line.value, valueX, cursorY);
+    ctx.shadowBlur = 0;
     cursorY += lineH;
   }
 
   if (showControls) {
     ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
     ctx.fillStyle = HUD_COLORS.PANEL_MUTED;
     ctx.font = `${isCompact ? 10 : 11}px ${HUD_FONT}`;
-    ctx.fillText(controlLabel, labelX, cursorY + 2);
+    ctx.fillText(controlLabel, x + basePad, cursorY + 2);
   }
   ctx.restore();
 }
 
-export function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH, isCompact) {
+export function getAutopilotButtonRect(screenW, screenH, isCompact = false) {
+  const scale = isCompact ? 0.85 : 1;
+  const width = AUTOPILOT.BUTTON.WIDTH * scale;
+  const height = AUTOPILOT.BUTTON.HEIGHT * scale;
+  const x = screenW / 2 - width / 2;
+  const y = screenH - height - AUTOPILOT.BUTTON.Y_OFFSET;
+  return { x, y, width, height };
+}
+
+export function drawAutopilotToggle(ctx, active, screenW, screenH, isCompact = false) {
+  const rect = getAutopilotButtonRect(screenW, screenH, isCompact);
+  const colors = AUTOPILOT.COLORS;
+  ctx.save();
+  drawHudFrame(ctx, rect.x, rect.y, rect.width, rect.height, {
+    fillStart: active ? colors.ON_FILL : colors.OFF_FILL,
+    fillEnd: active ? colors.ON_FILL : colors.OFF_FILL,
+    stroke: colors.BORDER,
+    glow: active ? colors.GLOW : HUD_COLORS.ACCENT_GLOW,
+    glowBlur: active ? 12 : 8,
+    notch: isCompact ? 10 : 12
+  });
+  drawHudTick(ctx, rect.x, rect.y + 6, rect.width, 12);
+  ctx.fillStyle = active ? colors.ON_TEXT : colors.OFF_TEXT;
+  ctx.font = `${isCompact ? 11 : 12}px ${HUD_FONT}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("AUTOPILOT", rect.x + rect.width / 2, rect.y + rect.height / 2);
+  ctx.restore();
+  return rect;
+}
+
+export function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH, isCompact, highlight = 0) {
   const displayScore = Math.max(0, Math.floor(score));
   const scoreText = displayScore.toString().padStart(7, "0");
   const edge = isCompact ? 12 : 18;
@@ -554,29 +766,8 @@ export function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH, is
   const ringRatio = Math.min(1, (multiplier - 1) / 6);
 
   ctx.save();
-
-  const panelGrad = ctx.createLinearGradient(x, y, x + panelW, y + panelH);
-  panelGrad.addColorStop(0, HUD_COLORS.PANEL_START);
-  panelGrad.addColorStop(1, HUD_COLORS.PANEL_END);
-
-  ctx.beginPath();
-  ctx.moveTo(x + 24, y);
-  ctx.lineTo(x + panelW, y);
-  ctx.lineTo(x + panelW - 16, y + panelH);
-  ctx.lineTo(x, y + panelH);
-  ctx.closePath();
-  ctx.fillStyle = panelGrad;
-  ctx.fill();
-  ctx.strokeStyle = HUD_COLORS.PANEL_STROKE;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  ctx.strokeStyle = HUD_COLORS.PANEL_TICK;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(x + 10, y + 8);
-  ctx.lineTo(x + panelW - 10, y + 8);
-  ctx.stroke();
+  drawHudFrame(ctx, x, y, panelW, panelH, { notch: isCompact ? 16 : 24, glowBlur: 12 });
+  drawHudTick(ctx, x, y + 8, panelW);
 
   ctx.textAlign = "left";
   ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
@@ -585,10 +776,11 @@ export function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH, is
 
   const scoreX = labelX;
   const scoreY = y + (isCompact ? 50 : 54);
+  const highlightPulse = Math.max(0, Math.min(1, highlight));
   const pulseT = Math.min(1, pulse / 1.2);
   const pulseEase = Math.pow(pulseT, 0.75);
-  const pulseScale = 1 + pulseEase * 0.26;
-  const glow = 14 + pulseEase * 60 + pulse * 12;
+  const pulseScale = 1 + pulseEase * 0.26 + highlightPulse * 0.18;
+  const glow = 14 + pulseEase * 60 + pulse * 12 + highlightPulse * 40;
   if (pulseT > 0) {
     const barW = 220 + pulseEase * 180;
     const barH = 14 + pulseEase * 10;
@@ -654,7 +846,8 @@ export function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH, is
   ctx.strokeText(scoreText, 0, 0);
   ctx.restore();
 
-  const badgeR = isCompact ? 13 : 15;
+  const badgeScale = 1 + highlightPulse * 0.18;
+  const badgeR = (isCompact ? 13 : 15) * badgeScale;
   const badgeX = x + panelW - (isCompact ? 34 : 38);
   const badgeY = y + panelH / 2 + 6;
   const badgeGrad = ctx.createRadialGradient(

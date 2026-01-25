@@ -1,9 +1,10 @@
 import { Asteroid } from "../entities/asteroid.js";
+import { ResourcePickup } from "../entities/resourcePickup.js";
 import { integrate } from "./physics.js";
 import { applyForcesToEntity } from "./forceFields.js";
 import { CONFIG } from "./config.js";
 
-const { PICKUPS, ENEMY, ASTEROID } = CONFIG;
+const { PICKUPS, ENEMY, ASTEROID, RESOURCE, STATION } = CONFIG;
 const FUEL_PICKUP_AMOUNT_RATIO = PICKUPS.FUEL.AMOUNT_RATIO;
 const ENEMY_HIT_RADIUS = ENEMY.HIT_RADIUS;
 const ENEMY_CHUNK_SPRITE = new Image();
@@ -27,8 +28,17 @@ const FUEL_PICKUP = {
   HEIGHT: PICKUPS.FUEL.HEIGHT,
   RADIUS: PICKUPS.FUEL.RADIUS,
   DROP_CHANCE: PICKUPS.FUEL.DROP_CHANCE,
+  TTL_MS: PICKUPS.FUEL.TTL_MS,
   ROT_SPEED_MIN: PICKUPS.FUEL.ROT_SPEED_MIN,
   ROT_SPEED_MAX: PICKUPS.FUEL.ROT_SPEED_MAX
+};
+const RESOURCE_DROP = {
+  BASE_VALUE: RESOURCE.DROP_BASE_VALUE,
+  DECAY: RESOURCE.CHILD_VALUE_DECAY,
+  MIN_VALUE: RESOURCE.MIN_DROP_VALUE,
+  RADIUS: RESOURCE.PICKUP_RADIUS,
+  CHANCE: RESOURCE.DROP_CHANCE,
+  TTL_MS: RESOURCE.TTL_MS
 };
 const ASTEROID_FRAGMENTS = ASTEROID.FRAGMENTS;
 
@@ -102,7 +112,7 @@ class EnemyChunk {
 }
 
 class FuelPickup {
-  constructor(x, y, vx, vy) {
+  constructor(x, y, vx, vy, spawnTimeMs = 0) {
     this.x = x;
     this.y = y;
     this.vx = vx;
@@ -111,6 +121,9 @@ class FuelPickup {
     const speed = FUEL_PICKUP.ROT_SPEED_MIN
       + Math.random() * (FUEL_PICKUP.ROT_SPEED_MAX - FUEL_PICKUP.ROT_SPEED_MIN);
     this.rotationSpeed = (Math.random() < 0.5 ? -1 : 1) * speed;
+    this.spawnTimeMs = spawnTimeMs;
+    this.ttlMs = FUEL_PICKUP.TTL_MS;
+    this.ageMs = 0;
   }
 
   update(dt) {
@@ -143,17 +156,53 @@ class FuelPickup {
       ctx.fill();
       ctx.stroke();
     }
+    if (this.ttlMs && this.ttlMs > 0) {
+      const remaining = Math.max(0, this.ttlMs - (this.ageMs ?? 0));
+      const ratio = Math.max(0, Math.min(1, remaining / this.ttlMs));
+      ctx.rotate(-this.rotation);
+      ctx.save();
+      ctx.strokeStyle = "rgba(240, 210, 150, 0.8)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, FUEL_PICKUP.RADIUS + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(255, 230, 190, 0.9)";
+      ctx.font = "10px Orbitron, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(Math.ceil(remaining / 1000), 0, FUEL_PICKUP.RADIUS + 14);
+      ctx.restore();
+    }
     ctx.restore();
   }
 }
 
-export function updateBullets(bullets, dt) {
+function isInStationSafeZone(x, y, stations) {
+  if (!Array.isArray(stations) || stations.length === 0) {
+    return false;
+  }
+  for (const station of stations) {
+    const dx = x - station.x;
+    const dy = y - station.y;
+    const radius = station.safeRadius ?? STATION.SAFE_ZONE_RADIUS;
+    if (Math.hypot(dx, dy) <= radius) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function updateBullets(bullets, dt, stations = null) {
   for (let i = bullets.length - 1; i >= 0; i--) {
     const b = bullets[i];
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     b.life -= dt;
     if (b.life <= 0) {
+      bullets.splice(i, 1);
+      continue;
+    }
+    if (isInStationSafeZone(b.x, b.y, stations)) {
       bullets.splice(i, 1);
     }
   }
@@ -167,7 +216,8 @@ export function updateEnemyBullets(
   invulnTimer,
   shipVisible,
   handleLifeLoss,
-  dt
+  dt,
+  stations = null
 ) {
   if (enemyBullets.length === 0) {
     return;
@@ -178,6 +228,10 @@ export function updateEnemyBullets(
     b.y += b.vy * dt;
     b.life -= dt;
     if (b.life <= 0) {
+      enemyBullets.splice(i, 1);
+      continue;
+    }
+    if (isInStationSafeZone(b.x, b.y, stations)) {
       enemyBullets.splice(i, 1);
       continue;
     }
@@ -221,16 +275,35 @@ function findSectorForPosition(activeSectors, x, y) {
   return null;
 }
 
-export function updateFuelPickups(fuelPickups, activeStars, activeSectors, dt) {
+export function updateFuelPickups(fuelPickups, activeStars, activeSectors, dt, worldAgeMs = null) {
   if (fuelPickups.length === 0) {
     return;
   }
   for (const fuel of fuelPickups) {
+    if (Number.isFinite(worldAgeMs) && Number.isFinite(fuel.spawnTimeMs)) {
+      fuel.ageMs = Math.max(0, worldAgeMs - fuel.spawnTimeMs);
+    }
     fuel.update(dt);
     const sector = findSectorForPosition(activeSectors, fuel.x, fuel.y);
     const rivers = sector?.runtimeRivers ?? [];
     applyForcesToEntity(fuel, dt, activeStars, rivers, CONFIG);
     integrate(fuel, dt);
+  }
+}
+
+export function updateResourcePickups(resourcePickups, activeStars, activeSectors, dt, worldAgeMs = null) {
+  if (resourcePickups.length === 0) {
+    return;
+  }
+  for (const pickup of resourcePickups) {
+    if (Number.isFinite(worldAgeMs) && Number.isFinite(pickup.spawnTimeMs)) {
+      pickup.ageMs = Math.max(0, worldAgeMs - pickup.spawnTimeMs);
+    }
+    pickup.update(dt);
+    const sector = findSectorForPosition(activeSectors, pickup.x, pickup.y);
+    const rivers = sector?.runtimeRivers ?? [];
+    applyForcesToEntity(pickup, dt, activeStars, rivers, CONFIG);
+    integrate(pickup, dt);
   }
 }
 
@@ -252,6 +325,22 @@ export function handleFuelPickups(fuelPickups, ship, shipRadius, scorePoints, ad
   }
 }
 
+export function handleResourcePickups(resourcePickups, ship, shipRadius, addResource, sounds) {
+  if (resourcePickups.length === 0) {
+    return;
+  }
+  for (let i = resourcePickups.length - 1; i >= 0; i--) {
+    const pickup = resourcePickups[i];
+    const dx = ship.x - pickup.x;
+    const dy = ship.y - pickup.y;
+    if (Math.hypot(dx, dy) < RESOURCE_DROP.RADIUS + shipRadius) {
+      addResource(pickup.value);
+      sounds?.play("got_money");
+      resourcePickups.splice(i, 1);
+    }
+  }
+}
+
 export function handleBulletHits(
   bullets,
   enemies,
@@ -261,6 +350,7 @@ export function handleBulletHits(
   addScore,
   sounds,
   fuelPickups,
+  resourcePickups,
   particles,
   worldAgeMs
 ) {
@@ -276,7 +366,7 @@ export function handleBulletHits(
       const dy = b.y - enemy.y;
       if (Math.hypot(dx, dy) < ENEMY_HIT_RADIUS + 3) {
         spawnExplosion(particles, enemy.x, enemy.y, "normal");
-        spawnFuelDrop(fuelPickups, enemy, true);
+        spawnFuelDrop(fuelPickups, enemy, true, worldAgeMs ?? 0);
         sounds.play("explosion");
         spawnEnemyChunks(particles, enemy);
         enemies.splice(j, 1);
@@ -296,7 +386,8 @@ export function handleBulletHits(
         const dy = b.y - a.y;
         const dist = Math.hypot(dx, dy);
         if (dist < a.radius + 3) {
-          spawnFuelDrop(fuelPickups, a);
+          spawnFuelDrop(fuelPickups, a, false, worldAgeMs ?? 0);
+          spawnResourceDrop(resourcePickups, a, worldAgeMs ?? 0);
           const isChunk = a.spriteKey === "chunk";
           const basePoints = isChunk
             ? Math.round(scorePoints.ASTEROID * scoreChunkMultiplier)
@@ -366,6 +457,15 @@ export function drawFuelPickups(ctx, fuelPickups) {
   }
   for (const fuel of fuelPickups) {
     fuel.draw(ctx);
+  }
+}
+
+export function drawResourcePickups(ctx, resourcePickups) {
+  if (resourcePickups.length === 0) {
+    return;
+  }
+  for (const pickup of resourcePickups) {
+    pickup.draw(ctx);
   }
 }
 
@@ -468,18 +568,43 @@ function spawnAsteroidFragments(asteroid, sector, spawnTimeMs) {
     const vx = Math.cos(angle) * speed;
     const vy = Math.sin(angle) * speed;
     const fragmentRadius = Math.max(4, asteroid.radius * (0.25 + Math.random() * 0.3));
-    const chunk = new Asteroid(asteroid.x, asteroid.y, vx, vy, fragmentRadius, 0, null, "chunk");
+    const generation = Number.isFinite(asteroid.generation) ? asteroid.generation + 1 : 1;
+    const chunk = new Asteroid(asteroid.x, asteroid.y, vx, vy, fragmentRadius, 0, null, "chunk", {
+      generation,
+      isFragment: true
+    });
     chunk.spawnTimeMs = spawnTimeMs;
     chunk.ttlMs = ASTEROID_FRAGMENTS.TTL_MS;
     sector.asteroids.push(chunk);
   }
 }
 
-function spawnFuelDrop(fuelPickups, source, guaranteed = false) {
+function spawnFuelDrop(fuelPickups, source, guaranteed = false, spawnTimeMs = 0) {
   if (!guaranteed && Math.random() > FUEL_PICKUP.DROP_CHANCE) {
     return;
   }
-  fuelPickups.push(new FuelPickup(source.x, source.y, source.vx, source.vy));
+  fuelPickups.push(new FuelPickup(source.x, source.y, source.vx, source.vy, spawnTimeMs));
+}
+
+function spawnResourceDrop(resourcePickups, source, spawnTimeMs) {
+  if (!resourcePickups) {
+    return;
+  }
+  if (Math.random() > RESOURCE_DROP.CHANCE) {
+    return;
+  }
+  const generation = Number.isFinite(source.generation) ? source.generation : 0;
+  const value = Math.max(
+    RESOURCE_DROP.MIN_VALUE,
+    Math.round(RESOURCE_DROP.BASE_VALUE * Math.pow(RESOURCE_DROP.DECAY, generation))
+  );
+  const driftAngle = Math.random() * Math.PI * 2;
+  const driftSpeed = 20 + Math.random() * 60;
+  const vx = Math.cos(driftAngle) * driftSpeed + source.vx * 0.15;
+  const vy = Math.sin(driftAngle) * driftSpeed + source.vy * 0.15;
+  const pickup = new ResourcePickup(source.x, source.y, vx, vy, value, spawnTimeMs);
+  pickup.ttlMs = RESOURCE_DROP.TTL_MS;
+  resourcePickups.push(pickup);
 }
 
 export function updateEnemyPings(enemyPings, dt) {

@@ -7,11 +7,12 @@ import { getSectorMeta, saveSectorIndex, setSectorMeta } from "./sectorIndex.js"
 import { saveGameState } from "./gameState.js";
 import { CONFIG } from "./config.js";
 import { getFieldTypeForSector } from "./riverNetwork.js";
+import { getStationInfoForSector, pickStationPosition } from "./stationSystem.js";
 
 export const SECTOR_SIZE = CONFIG.SECTOR.SIZE;
 export const SECTOR_TYPES = CONFIG.SECTOR.TYPES;
 
-const { SECTOR, STAR: STAR_CONFIG, ASTEROID, GOAL, END_ZONE, FIELD } = CONFIG;
+const { SECTOR, STAR: STAR_CONFIG, ASTEROID, GOAL, END_ZONE, FIELD, STATION } = CONFIG;
 const STAR_GEN = STAR_CONFIG.GENERATION;
 const STAR = STAR_GEN;
 const STAR_WELL = STAR_GEN.WELL;
@@ -32,6 +33,7 @@ const ANOMALY_MODIFIERS = SECTOR.ANOMALY_MODIFIERS;
 const SPAWN_PROFILES = SECTOR.SPAWN_PROFILES;
 const SEED_SALT = SECTOR.SEED_SALT;
 const STAR_RATE_MULTIPLIER = STAR_GEN.RATE_MULTIPLIER;
+const STATION_SAFE_RADIUS = STATION.SAFE_ZONE_RADIUS;
 const ZONES = SECTOR.ZONES;
 const FIELD_TYPES = FIELD.TYPES;
 const PATTERN_VERSION = 1;
@@ -394,6 +396,10 @@ function generateStars(
   safetyTargets = null
 ) {
   const stars = [];
+  const sectorCenter = {
+    x: bounds.x + bounds.size / 2,
+    y: bounds.y + bounds.size / 2
+  };
   const counts = getStarCountsForRing(ring);
   const rateMultiplier = starMultiplier * STAR_RATE_MULTIPLIER;
   const scaled = {
@@ -479,6 +485,11 @@ function generateStars(
     let pos = null;
     for (let tries = 0; tries < STAR_PLACEMENT.MAX_TRIES_PER_STAR; tries++) {
       const candidate = pickStarCandidate(patternRng, bounds, STAR.MARGIN, pattern, starIndex);
+      const centerDx = candidate.x - sectorCenter.x;
+      const centerDy = candidate.y - sectorCenter.y;
+      if (Math.hypot(centerDx, centerDy) < gravityRadius) {
+        continue;
+      }
       if (safePoint) {
         const dx = candidate.x - safePoint.x;
         const dy = candidate.y - safePoint.y;
@@ -565,7 +576,7 @@ function generateStars(
   return stars;
 }
 
-function generateEndZone(rng, bounds, goalX, goalY) {
+function generateEndZone(rng, bounds, goalX, goalY, station = null) {
   const edges = ["north", "south", "west", "east"];
   let zone = null;
 
@@ -593,6 +604,13 @@ function generateEndZone(rng, bounds, goalX, goalY) {
     if (Math.hypot(dx, dy) < END_ZONE.MIN_GOAL_DIST) {
       continue;
     }
+    if (station) {
+      const sx = x - station.x;
+      const sy = y - station.y;
+      if (Math.hypot(sx, sy) < STATION_SAFE_RADIUS) {
+        continue;
+      }
+    }
 
     zone = new EndZone(x, y, END_ZONE.WIDTH, END_ZONE.HEIGHT);
     break;
@@ -610,7 +628,7 @@ function generateEndZone(rng, bounds, goalX, goalY) {
   return zone;
 }
 
-function generateGoal(rng, bounds, stars, safePoint, safeRadius, anchor = null) {
+function generateGoal(rng, bounds, stars, safePoint, safeRadius, anchor = null, station = null) {
   let goalX = bounds.x + bounds.size / 2 - GOAL.WIDTH / 2;
   let goalY = bounds.y + bounds.size / 2 - GOAL.HEIGHT / 2;
   const anchorRadius = anchor?.radius ?? GOAL.ANCHOR_RADIUS_DEFAULT;
@@ -636,6 +654,13 @@ function generateGoal(rng, bounds, stars, safePoint, safeRadius, anchor = null) 
       const sx = gx - safePoint.x;
       const sy = gy - safePoint.y;
       if (Math.hypot(sx, sy) < safeRadius) {
+        continue;
+      }
+    }
+    if (station) {
+      const sx = gx - station.x;
+      const sy = gy - station.y;
+      if (Math.hypot(sx, sy) < STATION_SAFE_RADIUS) {
         continue;
       }
     }
@@ -763,7 +788,10 @@ function generateAsteroids(rng, bounds, asteroidMultiplier, safePoint, safeRadiu
     const rotation = randomRange(rng, 0, Math.PI * 2);
     const rotationSpeed = randomRange(rng, 0.05, 0.18) * (rng() < 0.5 ? -1 : 1);
 
-    asteroids.push(new Asteroid(pos.x, pos.y, vx, vy, radius, rotation, rotationSpeed));
+    asteroids.push(new Asteroid(pos.x, pos.y, vx, vy, radius, rotation, rotationSpeed, "asteroid", {
+      generation: 0,
+      isFragment: false
+    }));
   }
   return asteroids;
 }
@@ -776,6 +804,7 @@ export class SectorManager {
     this.worldSeed = Number.isFinite(opts.worldSeed) ? opts.worldSeed : 0;
     this.sectorIndex = opts.sectorIndex ?? {};
     this.gameState = opts.gameState ?? null;
+    this.persist = opts.persist !== false;
     this.entrySafeRadius = Number.isFinite(opts.entrySafeRadius) ? opts.entrySafeRadius : ENTRY_SAFE_RADIUS;
     this.startSafeRadius = Number.isFinite(opts.startSafeRadius) ? opts.startSafeRadius : this.entrySafeRadius;
   }
@@ -835,6 +864,41 @@ export class SectorManager {
       normalized.beaconPosition = null;
       updated = true;
     }
+    const stationInfo = getStationInfoForSector(this.worldSeed, sx, sy, ring);
+    if (normalized.hasStation === undefined) {
+      normalized.hasStation = Boolean(stationInfo?.hasStation);
+      updated = true;
+    }
+    if (normalized.hasStation) {
+      if (!normalized.stationId && stationInfo?.stationId) {
+        normalized.stationId = stationInfo.stationId;
+        updated = true;
+      }
+      if (normalized.stationTierCap === undefined) {
+        normalized.stationTierCap = stationInfo?.tierCap ?? null;
+        updated = true;
+      }
+      if (!normalized.stationPos) {
+        const rng = createRng(this.getSectorSeed(sx, sy, SEED_SALT.STATION));
+        normalized.stationPos = pickStationPosition(
+          rng,
+          this.getBounds(sx, sy),
+          safePoint,
+          safeRadius,
+          normalized.beaconPosition
+        );
+        updated = true;
+      }
+      if (normalized.stationDiscovered === undefined) {
+        normalized.stationDiscovered = Boolean(stationInfo?.isStartStation);
+        updated = true;
+      }
+    } else {
+      if (normalized.stationDiscovered === undefined) {
+        normalized.stationDiscovered = false;
+        updated = true;
+      }
+    }
     if (normalized.visited === undefined) {
       normalized.visited = false;
       updated = true;
@@ -857,16 +921,20 @@ export class SectorManager {
     }
     if (updated) {
       setSectorMeta(this.sectorIndex, sx, sy, normalized);
-      saveSectorIndex(this.sectorIndex);
+      if (this.persist) {
+        saveSectorIndex(this.sectorIndex);
+      }
     }
     return normalized;
   }
 
   createSectorMeta(sx, sy, ring, safePoint, safeRadius) {
     const existing = getSectorMeta(this.sectorIndex, sx, sy);
-    if (existing) {
+    const existingHasType = Object.values(SECTOR_TYPES).includes(existing?.sectorType);
+    if (existing && existingHasType) {
       return this.normalizeSectorMeta(existing, sx, sy, ring, safePoint, safeRadius);
     }
+    const priorStation = existingHasType ? null : existing;
 
     const fieldType = getFieldTypeForSector(this.worldSeed, sx, sy);
     const influence = Math.max(0, this.gameState?.beacon?.exposure ?? 0);
@@ -885,6 +953,22 @@ export class SectorManager {
     const beaconPosition = beaconPlaced
       ? pickBeaconPosition(createRng(this.getSectorSeed(sx, sy, SEED_SALT.BEACON)), this.getBounds(sx, sy), safePoint, safeRadius)
       : null;
+    const stationInfo = getStationInfoForSector(this.worldSeed, sx, sy, ring);
+    const hasStation = Boolean(stationInfo?.hasStation);
+    const stationId = hasStation ? (priorStation?.stationId ?? stationInfo.stationId) : null;
+    const stationTierCap = hasStation ? (priorStation?.stationTierCap ?? stationInfo.tierCap) : null;
+    const stationDiscovered = hasStation
+      ? Boolean(stationInfo?.isStartStation || priorStation?.stationDiscovered)
+      : false;
+    const stationPos = hasStation
+      ? (priorStation?.stationPos ?? pickStationPosition(
+        createRng(this.getSectorSeed(sx, sy, SEED_SALT.STATION)),
+        this.getBounds(sx, sy),
+        safePoint,
+        safeRadius,
+        beaconPosition
+      ))
+      : null;
     const patternId = getPatternBehaviorForField(fieldType);
     const patternParamsSeed = this.getSectorSeed(sx, sy, SEED_SALT.PATTERN);
 
@@ -893,6 +977,11 @@ export class SectorManager {
       sectorMood,
       beaconPlaced,
       beaconPosition,
+      hasStation,
+      stationId,
+      stationPos,
+      stationDiscovered,
+      stationTierCap,
       generatedAtExposure: influence,
       visited: false,
       surveyComplete: false,
@@ -910,9 +999,13 @@ export class SectorManager {
       if (sectorType === SECTOR_TYPES.SIGNAL_ORIGIN) {
         this.gameState.lastSignalOriginStep = this.gameState.newSectorCount;
       }
-      saveGameState(this.gameState);
+      if (this.persist) {
+        saveGameState(this.gameState);
+      }
     }
-    saveSectorIndex(this.sectorIndex);
+    if (this.persist) {
+      saveSectorIndex(this.sectorIndex);
+    }
     return meta;
   }
 
@@ -980,16 +1073,30 @@ export class SectorManager {
         patternVersion
       }
     );
+    const station = meta.hasStation && meta.stationPos
+      ? {
+        id: meta.stationId ?? `${sx},${sy}`,
+        x: meta.stationPos.x,
+        y: meta.stationPos.y,
+        safeRadius: STATION.SAFE_ZONE_RADIUS,
+        colliderRadius: STATION.COLLIDER_RADIUS,
+        dockRadius: STATION.DOCK_RADIUS,
+        isStartStation: Boolean(meta.stationTierCap === STATION.START_STATION_TIER_CAP),
+        tierCap: meta.stationTierCap ?? null,
+        discovered: Boolean(meta.stationDiscovered)
+      }
+      : null;
     const goalAnchor = meta.sectorType === SECTOR_TYPES.SIGNAL_ORIGIN && meta.beaconPosition
       ? { x: meta.beaconPosition.x, y: meta.beaconPosition.y, radius: 520 }
       : null;
     const goalRng = createRng(this.getSectorSeed(sx, sy, SEED_SALT.GOAL));
-    const goal = generateGoal(goalRng, bounds, stars, entryOrigin, safeRadius, goalAnchor);
+    const goal = generateGoal(goalRng, bounds, stars, entryOrigin, safeRadius, goalAnchor, station);
     const endZone = generateEndZone(
       createRng(this.getSectorSeed(sx, sy, SEED_SALT.END_ZONE)),
       bounds,
       goal.x,
-      goal.y
+      goal.y,
+      station
     );
     const asteroidMultiplier = zone.asteroidMultiplier * spawnProfile.asteroids;
     const asteroidRng = createRng(this.getSectorSeed(sx, sy, SEED_SALT.ASTEROIDS));
@@ -1027,6 +1134,7 @@ export class SectorManager {
         y: meta.beaconPosition?.y ?? bounds.y + bounds.size / 2,
         radius: 900
       } : null,
+      station,
       stars,
       goal,
       endZone,

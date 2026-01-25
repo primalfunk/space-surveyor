@@ -9,7 +9,17 @@ const ASTEROID_ROT_SPEED_MIN = ASTEROID.ROT_SPEED_MIN;
 const ASTEROID_ROT_SPEED_MAX = ASTEROID.ROT_SPEED_MAX;
 
 export class Asteroid {
-  constructor(x, y, vx, vy, radius = 16, rotation = 0, rotationSpeed = null, spriteKey = "asteroid") {
+  constructor(
+    x,
+    y,
+    vx,
+    vy,
+    radius = 16,
+    rotation = 0,
+    rotationSpeed = null,
+    spriteKey = "asteroid",
+    options = {}
+  ) {
     this.x = x;
     this.y = y;
     this.vx = vx;
@@ -17,6 +27,8 @@ export class Asteroid {
     this.radius = radius;
     this.rotation = rotation;
     this.spriteKey = spriteKey;
+    this.generation = Number.isFinite(options.generation) ? options.generation : 0;
+    this.isFragment = Boolean(options.isFragment);
     const baseSpeed = rotationSpeed ?? (
       ASTEROID_ROT_SPEED_MIN
       + Math.random() * (ASTEROID_ROT_SPEED_MAX - ASTEROID_ROT_SPEED_MIN)

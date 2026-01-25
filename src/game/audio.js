@@ -2,12 +2,16 @@ import { CONFIG } from "./config.js";
 
 const SOUND_DEFS = CONFIG.AUDIO.SOUNDS;
 
+const clampVolume = (value) => Math.max(0, Math.min(1, value));
+
 class SoundManager {
   constructor(defs) {
     this.defs = defs;
     this.pool = new Map();
     this.loopHandles = new Map();
     this.preloaded = false;
+    this.muted = false;
+    this.mutedKeys = new Set();
   }
 
   preload() {
@@ -17,7 +21,7 @@ class SoundManager {
     for (const [key, def] of Object.entries(this.defs)) {
       const audio = new Audio(def.src);
       audio.preload = "auto";
-      audio.volume = def.volume ?? 1;
+      audio.volume = clampVolume(def.volume ?? 1);
       this.pool.set(key, [audio]);
     }
     this.preloaded = true;
@@ -26,6 +30,9 @@ class SoundManager {
   play(key) {
     const def = this.defs[key];
     if (!def) {
+      return;
+    }
+    if (this.muted || this.mutedKeys.has(key)) {
       return;
     }
     let pool = this.pool.get(key);
@@ -39,12 +46,15 @@ class SoundManager {
       audio.preload = "auto";
       pool.push(audio);
     }
-    audio.volume = def.volume ?? 1;
+    audio.volume = clampVolume(def.volume ?? 1);
     audio.currentTime = 0;
     audio.play().catch(() => {});
   }
 
   startLoop(key, segmentSeconds = 0.4, crossfadeSeconds = 0.16) {
+    if (this.muted || this.mutedKeys.has(key)) {
+      return;
+    }
     if (this.loopHandles.has(key)) {
       return;
     }
@@ -52,7 +62,7 @@ class SoundManager {
     if (!def) {
       return;
     }
-    const volume = def.volume ?? 1;
+    const volume = clampVolume(def.volume ?? 1);
     const fadeMs = Math.max(20, crossfadeSeconds * 1000);
     const segmentMs = Math.max(100, segmentSeconds * 1000);
     const intervalMs = Math.max(40, segmentMs - fadeMs);
@@ -60,7 +70,7 @@ class SoundManager {
     const makeAudio = () => {
       const audio = new Audio(def.src);
       audio.preload = "auto";
-      audio.volume = volume;
+      audio.volume = clampVolume(volume);
       return audio;
     };
 
@@ -78,7 +88,7 @@ class SoundManager {
           return;
         }
         const t = Math.min(1, (time - start) / fadeMs);
-        audio.volume = from + (to - from) * t;
+        audio.volume = clampVolume(from + (to - from) * t);
         if (t < 1) {
           const id = requestAnimationFrame(step);
           rafIds.add(id);
@@ -92,7 +102,7 @@ class SoundManager {
 
     const startAudio = (audio, fadeIn) => {
       audio.currentTime = 0;
-      audio.volume = fadeIn ? 0 : volume;
+      audio.volume = fadeIn ? 0 : clampVolume(volume);
       audio.play().catch(() => {});
       if (fadeIn) {
         fade(audio, 0, volume);
@@ -104,7 +114,7 @@ class SoundManager {
       fade(audio, from, 0, () => {
         audio.pause();
         audio.currentTime = 0;
-        audio.volume = volume;
+        audio.volume = clampVolume(volume);
       });
     };
 
@@ -134,8 +144,8 @@ class SoundManager {
         b.pause();
         a.currentTime = 0;
         b.currentTime = 0;
-        a.volume = volume;
-        b.volume = volume;
+        a.volume = clampVolume(volume);
+        b.volume = clampVolume(volume);
       }
     });
   }
@@ -153,6 +163,31 @@ class SoundManager {
       handle.audio.currentTime = 0;
     }
     this.loopHandles.delete(key);
+  }
+
+  setMuted(muted) {
+    const next = Boolean(muted);
+    if (this.muted === next) {
+      return;
+    }
+    this.muted = next;
+    if (this.muted) {
+      for (const key of this.loopHandles.keys()) {
+        this.stopLoop(key);
+      }
+    }
+  }
+
+  setKeyMuted(key, muted) {
+    if (!key) {
+      return;
+    }
+    if (muted) {
+      this.mutedKeys.add(key);
+      this.stopLoop(key);
+    } else {
+      this.mutedKeys.delete(key);
+    }
   }
 }
 

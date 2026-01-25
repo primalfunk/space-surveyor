@@ -1,26 +1,33 @@
 import { Ship } from "../entities/ship.js";
 import { EnemyShip } from "../entities/enemyShip.js";
 import { BeaconRelic } from "../entities/beaconRelic.js";
+import { UpgradeStation } from "../entities/upgradeStation.js";
 import { Camera } from "./camera.js";
 import { SectorManager, SECTOR_SIZE, SECTOR_TYPES } from "./sectorManager.js";
 import { computeStarAccelAt, integrate } from "./physics.js";
 import { applyForcesToEntity } from "./forceFields.js";
 import { sounds, music } from "./audio.js";
 import { getSectorMeta, saveSectorIndex, setSectorMeta } from "./sectorIndex.js";
-import { saveGameState } from "./gameState.js";
+import { createDefaultGameState, saveGameState } from "./gameState.js";
 import { showShipDestroyedModal } from "../ui/shipDestroyedModal.js";
+import { showUpgradeStationModal } from "../ui/upgradeStationModal.js";
 import { drawRivers } from "./riverRender.js";
 import { getRiversForSector } from "./riverNetwork.js";
+import { getStationInfoForSector, pickStationPosition } from "./stationSystem.js";
+import { createRng } from "./rng.js";
 import {
   ALERT,
   HUD_COLORS,
   HUD_FONT,
   MINIMAP,
+  drawAutopilotToggle,
   drawAlerts,
+  getAutopilotButtonRect,
   drawBeaconSignalHud,
   drawBearingIndicators,
   drawFuelGauge,
   drawMiniMap,
+  drawStationIndicators,
   drawScanPulse,
   drawScoreHud,
   drawStatusHud
@@ -43,9 +50,11 @@ import {
   drawEnemies,
   drawEnemyBullets,
   drawFuelPickups,
+  drawResourcePickups,
   getEnemySpawnCountForSector,
   handleBulletHits,
   handleFuelPickups,
+  handleResourcePickups,
   spawnBullet,
   spawnExplosion,
   updateBullets,
@@ -53,6 +62,7 @@ import {
   updateEnemyBullets,
   updateEnemyPings,
   updateFuelPickups,
+  updateResourcePickups,
   updateParticles
 } from "./combatSystem.js";
 import { CONFIG } from "./config.js";
@@ -72,7 +82,10 @@ const {
   SHIP,
   STORAGE,
   SECTOR,
-  RIVER
+  RIVER,
+  AUTOPILOT,
+  UPGRADES,
+  STATION
 } = CONFIG;
 
 const { ZOOM, SHAKE } = CAMERA;
@@ -81,7 +94,8 @@ const {
   STARTING_LIVES,
   INVULN_DURATION,
   GAME_OVER_DELAY,
-  RESPAWN_DELAY
+  RESPAWN_DELAY,
+  INTRO
 } = GAMEPLAY;
 const { CHUNK_MULTIPLIER: SCORE_CHUNK_MULTIPLIER, POINTS: SCORE_POINTS } = SCORE;
 const { SHIP_RADIUS: CALIBRATION_SHIP_RADIUS, GATE: CALIBRATION_GATE } = CALIBRATION;
@@ -104,7 +118,8 @@ const ENEMY_FIRE_RANGE = ENEMY_EFFECTIVE_RANGE * 1.1;
 const ENEMY_BULLET_LIFE = BULLET.LIFE * ENEMY_RANGE_SCALE;
 const keys = {};
 window.addEventListener("keydown", (e) => {
-  keys[e.key.toLowerCase()] = true;
+  const key = e.key.toLowerCase();
+  keys[key] = true;
 });
 window.addEventListener("keyup", (e) => {
   keys[e.key.toLowerCase()] = false;
@@ -112,6 +127,13 @@ window.addEventListener("keyup", (e) => {
 
 function getViewRadius(canvas, camera) {
   return (Math.hypot(canvas.width, canvas.height) / 2) / camera.zoom;
+}
+
+function getSectorCenter(sx, sy) {
+  return {
+    x: sx * SECTOR_SIZE + SECTOR_SIZE / 2,
+    y: sy * SECTOR_SIZE + SECTOR_SIZE / 2
+  };
 }
 
 function randomRange(min, max) {
@@ -238,18 +260,29 @@ function drawStarfield(ctx, starfield, offsetX, offsetY, width, height) {
   ctx.drawImage(starfield, ox + width, oy + height);
 }
 
-export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOver) {
+export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOver, options = {}) {
+  const demoMode = Boolean(options?.demoMode);
+  const autopilotDefault = Boolean(options?.autopilotDefault);
+  if (demoMode) {
+    gameState = createDefaultGameState(AUTOPILOT.DEMO_SEED);
+    sectorIndex = {};
+  }
+  const allowPersistence = !demoMode;
   sounds.preload();
+  sounds.setMuted(demoMode);
   music.start();
   const startX = SECTOR_SIZE / 2;
   const startY = SECTOR_SIZE / 2;
+  const originX = startX;
+  const originY = startY;
   const ship = new Ship(startX, startY);
   const camera = new Camera(ship);
   const sectorManager = new SectorManager({
     worldSeed: Number.isFinite(gameState?.worldSeed) ? gameState.worldSeed : 0,
     sectorIndex,
     gameState,
-    startSafeRadius: START_SAFE_RADIUS
+    startSafeRadius: START_SAFE_RADIUS,
+    persist: allowPersistence
   });
   let sector = sectorManager.getSectorForPosition(
     ship.x,
@@ -260,6 +293,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     ship.y,
     ACTIVE_SECTOR_RANGE
   );
+  let farthestSector = { sx: sector.sx, sy: sector.sy, distance: 0 };
   const trail = [];
   const SHIP_RADIUS = SHIP.COLLISION_RADIUS;
   const TRAIL_MAX = SHIP.TRAIL.MAX;
@@ -284,8 +318,10 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
   const enemyBullets = [];
   const enemies = [];
   const fuelPickups = [];
+  const resourcePickups = [];
   const alerts = [];
   const scorePopups = [];
+  let stationMarkers = [];
 
   let lastTime = performance.now();
   let running = true;
@@ -296,13 +332,38 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
   let cachedGameOverStats = null;
   let shipVisible = true;
   let respawnTimer = 0;
-  let lives = STARTING_LIVES;
+  let upgradeLevels = {
+    fireRateLevel: 0,
+    hullLevel: 0,
+    collectorLevel: 0
+  };
+  let resourceCurrency = 0;
+  if (gameState) {
+    if (Number.isFinite(gameState.resourceCurrency)) {
+      resourceCurrency = Math.max(0, Math.floor(gameState.resourceCurrency));
+    }
+    if (gameState.upgrades) {
+      upgradeLevels = {
+        fireRateLevel: Math.min(UPGRADES.FIRE_RATE.levelMax, Math.max(0, Math.floor(gameState.upgrades.fireRateLevel ?? 0))),
+        hullLevel: Math.min(UPGRADES.HULL.levelMax, Math.max(0, Math.floor(gameState.upgrades.hullLevel ?? 0))),
+        collectorLevel: Math.min(UPGRADES.COLLECTOR.levelMax, Math.max(0, Math.floor(gameState.upgrades.collectorLevel ?? 0)))
+      };
+    }
+  }
+  let maxLives = getMaxLives(upgradeLevels.hullLevel);
+  let lives = maxLives;
+  if (gameState) {
+    gameState.resourceCurrency = resourceCurrency;
+    gameState.upgrades = {
+      fireRateLevel: upgradeLevels.fireRateLevel,
+      hullLevel: upgradeLevels.hullLevel,
+      collectorLevel: upgradeLevels.collectorLevel
+    };
+  }
   let surveyed = 0;
   let invulnTimer = 0;
   let timeSpent = 0;
   let distanceTraveled = 0;
-  let lastShipX = ship.x;
-  let lastShipY = ship.y;
   let scoreMultiplier = 1;
   let score = 0;
   let combatScore = 0;
@@ -313,6 +374,40 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
   let enemiesInRange = [];
   const enemyPings = [];
   let alertClock = 0;
+  const intro = {
+    enabled: !demoMode,
+    suppressAlerts: !demoMode,
+    clock: 0,
+    nextAt: 0,
+    controlUsed: false,
+    firstSurveyComplete: false,
+    sectorTransitions: 0,
+    lastSectorKey: null,
+    releaseAlertsAt: null,
+    flags: {
+      systems: false,
+      goals: false,
+      score: false,
+      fuel: false,
+      weird: false,
+      rivers: false,
+      stars: false,
+      distance: false,
+      anomaly: false,
+      echo: false,
+      movingStars: false,
+      station: false
+    },
+    highlightQueue: [],
+    highlights: {
+      goal: 0,
+      exit: 0,
+      score: 0,
+      fuel: 0,
+      vignette: 0,
+      river: 0
+    }
+  };
   let shakeTime = 0;
   let shakeDuration = 0;
   let shakeStrength = 0;
@@ -337,6 +432,22 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
   let controlsDisabledTimer = 0;
   let deathPauseActive = false;
   let deathModal = null;
+  let docked = false;
+  let dockStation = null;
+  let stationEntryLockId = null;
+  let upgradeModal = null;
+  let interactPressed = false;
+  let lastInteractHeld = false;
+  let lastEscapeHeld = false;
+  let autopilotActive = autopilotDefault;
+  let lastAutopilotKey = false;
+  let autopilotFirePause = 0;
+  let autopilotThrustCooldown = 0;
+  let autopilotThrustBurst = 0;
+  let autopilotButtonRect = null;
+  sounds.setKeyMuted("thrust", autopilotActive);
+  sounds.setKeyMuted("thrust_rotate", autopilotActive);
+  let autopilotTarget = null;
   const beaconSignal = {
     phase: 0,
     motif: "INVOCATION",
@@ -358,6 +469,8 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     moveY: 0,
     isActive: false
   };
+  const hasTouchInput = ("ontouchstart" in window) || (navigator.maxTouchPoints ?? 0) > 0;
+  let interactButton = null;
   const mouseAimStorageKey = STORAGE.MOUSE_AIM_KEY;
   let mouseAimEnabled = true;
   let wheelZoomStep = 0;
@@ -382,11 +495,46 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     mouse.y = (event.clientY - rect.top) * scaleY;
     mouse.hasMoved = true;
   };
+  const getAutopilotRectScreen = () => {
+    if (autopilotButtonRect) {
+      return autopilotButtonRect;
+    }
+    const hudScale = getHudScale(canvas.width, canvas.height);
+    const hudW = canvas.width / hudScale;
+    const hudH = canvas.height / hudScale;
+    const isCompactHud = Math.min(canvas.width, canvas.height) < 820;
+    const rect = getAutopilotButtonRect(hudW, hudH, isCompactHud);
+    return {
+      x: rect.x * hudScale,
+      y: rect.y * hudScale,
+      width: rect.width * hudScale,
+      height: rect.height * hudScale
+    };
+  };
+  const tryToggleAutopilot = (screenX, screenY) => {
+    if (docked || deathPauseActive || pendingGameOver) {
+      return false;
+    }
+    const rect = getAutopilotRectScreen();
+    if (!rect) {
+      return false;
+    }
+    const hit = screenX >= rect.x && screenX <= rect.x + rect.width
+      && screenY >= rect.y && screenY <= rect.y + rect.height;
+    if (!hit) {
+      return false;
+    }
+    setAutopilotActive(!autopilotActive, true);
+    return true;
+  };
 
   const onMouseMove = (event) => updateMousePosition(event);
   const onMouseDown = (event) => {
     updateMousePosition(event);
     if (event.button === 0) {
+      if (tryToggleAutopilot(mouse.x, mouse.y)) {
+        return;
+      }
       mouse.leftDown = true;
     } else if (event.button === 2) {
       mouse.rightDown = true;
@@ -449,6 +597,9 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     event.preventDefault();
     for (const t of event.changedTouches) {
       const pos = getTouchPosition(t);
+      if (tryToggleAutopilot(pos.x, pos.y)) {
+        continue;
+      }
       if (pos.x <= canvas.width * TOUCH.MOVE_ZONE && touch.moveId === null) {
         touch.moveId = t.identifier;
         touch.moveStartX = pos.x;
@@ -516,6 +667,19 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
   canvas.addEventListener("contextmenu", onContextMenu);
   canvas.addEventListener("wheel", onWheel, { passive: false });
 
+  if (uiRoot && hasTouchInput) {
+    interactButton = document.createElement("button");
+    interactButton.type = "button";
+    interactButton.className = "interact-button";
+    interactButton.textContent = "INTERACT";
+    interactButton.style.display = "none";
+    interactButton.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      interactPressed = true;
+    });
+    uiRoot.appendChild(interactButton);
+  }
+
   function cleanupMouseControls() {
     window.removeEventListener("mousemove", onMouseMove);
     window.removeEventListener("mousedown", onMouseDown);
@@ -527,23 +691,37 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     window.removeEventListener("keydown", onToggleMouseAim);
     canvas.removeEventListener("contextmenu", onContextMenu);
     canvas.removeEventListener("wheel", onWheel);
+    if (interactButton) {
+      interactButton.remove();
+      interactButton = null;
+    }
+    closeUpgradeModal();
   }
 
   function respawn() {
-    ship.x = startX;
-    ship.y = startY;
+    const target = farthestSector ?? { sx: sector?.sx ?? 0, sy: sector?.sy ?? 0, distance: 0 };
+    const respawnPoint = getSectorCenter(target.sx, target.sy);
+    ship.x = respawnPoint.x;
+    ship.y = respawnPoint.y;
     ship.vx = 0;
     ship.vy = 0;
     ship.heading = 0;
     ship.fuel = ship.maxFuel;
-    lastShipX = ship.x;
-    lastShipY = ship.y;
     lastTrailX = null;
     lastTrailY = null;
     trail.length = 0;
     invulnTimer = INVULN_DURATION;
     scoreMultiplier = 1;
     ship.stopThrustLoop();
+    sector = sectorManager.getSectorForPosition(ship.x, ship.y);
+    if (intro.enabled && sector) {
+      const sectorKey = `${sector.sx},${sector.sy}`;
+      if (intro.lastSectorKey && intro.lastSectorKey !== sectorKey) {
+        intro.sectorTransitions += 1;
+      }
+      intro.lastSectorKey = sectorKey;
+    }
+    activeSectors = sectorManager.getSectorsAround(ship.x, ship.y, ACTIVE_SECTOR_RANGE);
   }
 
   function getScorePopupColor(eventType) {
@@ -578,18 +756,404 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     spawnScorePopup(applied, worldPos, eventType);
   }
 
+  function syncUpgradeState() {
+    maxLives = getMaxLives(upgradeLevels.hullLevel);
+    if (gameState) {
+      gameState.upgrades = {
+        fireRateLevel: upgradeLevels.fireRateLevel,
+        hullLevel: upgradeLevels.hullLevel,
+        collectorLevel: upgradeLevels.collectorLevel
+      };
+      markStateDirty();
+    }
+  }
+
+  function buildUpgradeUiState(station) {
+    const tierCap = Number.isFinite(station?.tierCap) ? station.tierCap : null;
+    const fireCap = Math.min(UPGRADES.FIRE_RATE.levelMax, tierCap ?? UPGRADES.FIRE_RATE.levelMax);
+    const hullCap = Math.min(UPGRADES.HULL.levelMax, tierCap ?? UPGRADES.HULL.levelMax);
+    const collectorCap = Math.min(UPGRADES.COLLECTOR.levelMax, tierCap ?? UPGRADES.COLLECTOR.levelMax);
+    const missingLives = Math.max(0, maxLives - lives);
+    return {
+      currency: resourceCurrency,
+      lives,
+      maxLives,
+      tierCap,
+      upgrades: {
+        fireRateLevel: upgradeLevels.fireRateLevel,
+        hullLevel: upgradeLevels.hullLevel,
+        collectorLevel: upgradeLevels.collectorLevel
+      },
+      caps: {
+        fireRateLevel: fireCap,
+        hullLevel: hullCap,
+        collectorLevel: collectorCap
+      },
+      costs: {
+        fireRate: upgradeLevels.fireRateLevel < fireCap
+          ? getUpgradeCost(UPGRADES.FIRE_RATE.baseCost, UPGRADES.FIRE_RATE.costMult, upgradeLevels.fireRateLevel)
+          : null,
+        hull: upgradeLevels.hullLevel < hullCap
+          ? getUpgradeCost(UPGRADES.HULL.baseCost, UPGRADES.HULL.costMult, upgradeLevels.hullLevel)
+          : null,
+        collector: upgradeLevels.collectorLevel < collectorCap
+          ? getUpgradeCost(UPGRADES.COLLECTOR.baseCost, UPGRADES.COLLECTOR.costMult, upgradeLevels.collectorLevel)
+          : null,
+        repair: missingLives > 0
+          ? Math.round(UPGRADES.REPAIR.baseCost + missingLives * UPGRADES.REPAIR.costPerLife)
+          : null
+      }
+    };
+  }
+
+  function closeUpgradeModal() {
+    if (upgradeModal) {
+      upgradeModal.destroy();
+      upgradeModal = null;
+    }
+  }
+
+  function openUpgradeModal(station) {
+    if (!uiRoot || upgradeModal) {
+      return;
+    }
+    upgradeModal = showUpgradeStationModal(uiRoot, buildUpgradeUiState(station), (action) => {
+      if (!action) {
+        return;
+      }
+      const state = buildUpgradeUiState(station);
+      if (action === "fireRate" && state.costs.fireRate !== null) {
+        if (spendResource(state.costs.fireRate)) {
+          upgradeLevels.fireRateLevel += 1;
+          syncUpgradeState();
+          sounds.play("bought");
+        }
+      } else if (action === "hull" && state.costs.hull !== null) {
+        if (spendResource(state.costs.hull)) {
+          upgradeLevels.hullLevel += 1;
+          syncUpgradeState();
+          sounds.play("bought");
+        }
+      } else if (action === "collector" && state.costs.collector !== null) {
+        if (spendResource(state.costs.collector)) {
+          upgradeLevels.collectorLevel += 1;
+          syncUpgradeState();
+          sounds.play("bought");
+        }
+      } else if (action === "repair" && state.costs.repair !== null) {
+        if (spendResource(state.costs.repair)) {
+          lives = maxLives;
+          syncUpgradeState();
+          sounds.play("bought");
+        }
+      }
+      if (upgradeModal) {
+        upgradeModal.update(buildUpgradeUiState(station));
+      }
+    });
+  }
+
   function queueRespawn() {
     shipVisible = false;
     ship.stopThrustLoop();
     respawnTimer = RESPAWN_DELAY;
   }
 
-  function queueAlert(text, delay = 0, duration = ALERT.DURATION) {
+  function queueAlert(text, delay = 0, duration = ALERT.DURATION, force = false) {
+    if (intro.suppressAlerts && !force) {
+      return;
+    }
     alerts.push({
       text,
       start: alertClock + delay,
       duration
     });
+  }
+
+  function scheduleIntroHighlight(keys, start, duration) {
+    if (!intro.enabled) {
+      return;
+    }
+    const list = Array.isArray(keys) ? keys : [keys];
+    for (const key of list) {
+      intro.highlightQueue.push({
+        key,
+        start,
+        duration
+      });
+    }
+  }
+
+  function triggerIntroHighlight(key, duration) {
+    intro.highlights[key] = Math.max(intro.highlights[key] ?? 0, duration);
+    if (key === "score") {
+      scorePulse = Math.max(scorePulse, 0.8);
+    }
+  }
+
+  function scheduleIntroAlert(id, text, options = {}) {
+    if (!intro.enabled || intro.flags[id]) {
+      return;
+    }
+    const duration = options.duration ?? INTRO.ALERT_DURATION ?? ALERT.DURATION;
+    const start = Math.max(alertClock, intro.nextAt);
+    queueAlert(text, start - alertClock, duration, true);
+    intro.flags[id] = true;
+    intro.nextAt = start + duration;
+    if (options.highlightKeys) {
+      scheduleIntroHighlight(options.highlightKeys, start, options.highlightDuration ?? duration);
+    }
+    if (options.releaseAlerts) {
+      intro.releaseAlertsAt = start + duration;
+    }
+    if (typeof options.onScheduled === "function") {
+      options.onScheduled();
+    }
+  }
+
+  function setAutopilotActive(next, announce = false) {
+    if (autopilotActive === next) {
+      return;
+    }
+    autopilotActive = next;
+    sounds.setKeyMuted("thrust", autopilotActive);
+    sounds.setKeyMuted("thrust_rotate", autopilotActive);
+    if (!next) {
+      autopilotFirePause = 0;
+      autopilotThrustCooldown = 0;
+      autopilotThrustBurst = 0;
+      autopilotTarget = null;
+      }
+      if (announce) {
+        const text = next ? AUTOPILOT.ALERTS.ENGAGED : AUTOPILOT.ALERTS.DISENGAGED;
+        queueAlert(text, 0, ALERT.DURATION * 1.1);
+      }
+    }
+
+  function getUpgradeCost(baseCost, costMult, currentLevel) {
+    return Math.round(baseCost * Math.pow(costMult, currentLevel));
+  }
+
+  function getFireCooldownSeconds(level) {
+    const maxLevel = UPGRADES.FIRE_RATE.levelMax;
+    const baseMs = UPGRADES.FIRE_RATE.effect.cooldownMsBase;
+    const minMs = UPGRADES.FIRE_RATE.effect.cooldownMsMin;
+    const t = maxLevel > 0 ? Math.min(1, level / maxLevel) : 0;
+    const ms = baseMs - (baseMs - minMs) * t;
+    return Math.max(minMs, ms) / 1000;
+  }
+
+  function getMaxLives(level) {
+    return UPGRADES.HULL.effect.maxLivesBase + level * UPGRADES.HULL.effect.livesPerLevel;
+  }
+
+  function getCollectorStats(level) {
+    const effect = UPGRADES.COLLECTOR.effect;
+    return {
+      radius: effect.radiusBase + level * effect.radiusPerLevel,
+      strength: Math.min(
+        effect.pullStrengthMax,
+        effect.pullStrengthBase + level * effect.pullStrengthPerLevel
+      )
+    };
+  }
+
+  function addResource(amount) {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return;
+    }
+    resourceCurrency = Math.max(0, Math.floor(resourceCurrency + amount));
+    if (gameState) {
+      gameState.resourceCurrency = resourceCurrency;
+      markStateDirty();
+    }
+  }
+
+  function spendResource(cost) {
+    if (!Number.isFinite(cost) || cost <= 0 || resourceCurrency < cost) {
+      return false;
+    }
+    resourceCurrency = Math.max(0, Math.floor(resourceCurrency - cost));
+    if (gameState) {
+      gameState.resourceCurrency = resourceCurrency;
+      markStateDirty();
+    }
+    return true;
+  }
+
+  function applyCollectorPull(pickups, collector, dt) {
+    if (!pickups || pickups.length === 0) {
+      return;
+    }
+    if (!collector || collector.radius <= 0 || collector.strength <= 0) {
+      return;
+    }
+    const radius = collector.radius;
+    const strength = collector.strength;
+    for (const pickup of pickups) {
+      const dx = ship.x - pickup.x;
+      const dy = ship.y - pickup.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist <= 0 || dist > radius) {
+        continue;
+      }
+      const t = 1 - dist / radius;
+      const accel = strength * t;
+      const nx = dx / dist;
+      const ny = dy / dist;
+      pickup.vx += nx * accel * dt;
+      pickup.vy += ny * accel * dt;
+    }
+  }
+
+  function drawStationSafeZone(ctx, station, shipInZone, dockedState) {
+    if (!station) {
+      return;
+    }
+    const radius = station.safeRadius ?? STATION.SAFE_ZONE_RADIUS;
+    const alpha = dockedState ? 0.22 : (shipInZone ? 0.18 : 0.12);
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const grad = ctx.createRadialGradient(station.x, station.y, radius * 0.2, station.x, station.y, radius);
+    grad.addColorStop(0, `rgba(90, 220, 160, ${alpha})`);
+    grad.addColorStop(1, "rgba(90, 220, 160, 0)");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(station.x, station.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(120, 240, 190, ${alpha * 0.9})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(station.x, station.y, radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function resolveStationCollision(station) {
+    if (!station) {
+      return;
+    }
+    const coreRadius = station.colliderRadius ?? STATION.COLLIDER_RADIUS;
+    if (!Number.isFinite(coreRadius) || coreRadius <= 0) {
+      return;
+    }
+    const dx = ship.x - station.x;
+    const dy = ship.y - station.y;
+    const minDist = coreRadius + SHIP_RADIUS;
+    const dist = Math.hypot(dx, dy);
+    if (dist === 0) {
+      const dirX = Math.sin(ship.heading);
+      const dirY = -Math.cos(ship.heading);
+      ship.x = station.x + dirX * minDist;
+      ship.y = station.y + dirY * minDist;
+      return;
+    }
+    if (dist < minDist) {
+      const nx = dx / dist;
+      const ny = dy / dist;
+      ship.x = station.x + nx * minDist;
+      ship.y = station.y + ny * minDist;
+      const dot = ship.vx * nx + ship.vy * ny;
+      if (dot < 0) {
+        ship.vx -= dot * nx;
+        ship.vy -= dot * ny;
+      }
+    }
+  }
+
+  function drawCollectorField(ctx, radius) {
+    if (!Number.isFinite(radius) || radius <= 0) {
+      return;
+    }
+    ctx.save();
+    ctx.strokeStyle = "rgba(120, 220, 180, 0.25)";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 8]);
+    ctx.beginPath();
+    ctx.arc(ship.x, ship.y, radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function getActiveStations() {
+    const stations = [];
+    for (const activeSector of activeSectors) {
+      if (activeSector.station) {
+        stations.push(activeSector.station);
+      }
+    }
+    return stations;
+  }
+
+  function destroyObjectsInSafeZones(stations) {
+    if (!stations || stations.length === 0) {
+      return;
+    }
+    for (const activeSector of activeSectors) {
+      if (activeSector.asteroids.length === 0) {
+        continue;
+      }
+      for (let i = activeSector.asteroids.length - 1; i >= 0; i--) {
+        const asteroid = activeSector.asteroids[i];
+        let remove = false;
+        for (const station of stations) {
+          const dx = asteroid.x - station.x;
+          const dy = asteroid.y - station.y;
+          if (Math.hypot(dx, dy) <= station.safeRadius) {
+            remove = true;
+            break;
+          }
+        }
+        if (remove) {
+          activeSector.asteroids.splice(i, 1);
+        }
+      }
+    }
+
+    for (let i = fuelPickups.length - 1; i >= 0; i--) {
+      const fuel = fuelPickups[i];
+      for (const station of stations) {
+        const dx = fuel.x - station.x;
+        const dy = fuel.y - station.y;
+        if (Math.hypot(dx, dy) <= station.safeRadius) {
+          fuelPickups.splice(i, 1);
+          break;
+        }
+      }
+    }
+    for (let i = resourcePickups.length - 1; i >= 0; i--) {
+      const pickup = resourcePickups[i];
+      for (const station of stations) {
+        const dx = pickup.x - station.x;
+        const dy = pickup.y - station.y;
+        if (Math.hypot(dx, dy) <= station.safeRadius) {
+          resourcePickups.splice(i, 1);
+          break;
+        }
+      }
+    }
+  }
+
+  function repelEnemiesFromStations(stations, dt) {
+    if (!stations || stations.length === 0 || enemies.length === 0) {
+      return;
+    }
+    for (const enemy of enemies) {
+      for (const station of stations) {
+        const dx = enemy.x - station.x;
+        const dy = enemy.y - station.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        if (dist < STATION.ENEMY_REPEL_RADIUS) {
+          const strength = STATION.ENEMY_REPEL_STRENGTH * (1 - dist / STATION.ENEMY_REPEL_RADIUS);
+          const nx = dx / dist;
+          const ny = dy / dist;
+          enemy.vx += nx * strength * dt;
+          enemy.vy += ny * strength * dt;
+          enemy.x += nx * 8;
+          enemy.y += ny * 8;
+        }
+      }
+    }
   }
 
   function getGateWidth(type) {
@@ -656,6 +1220,471 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     }
     return { x: Math.sin(ship.heading), y: -Math.cos(ship.heading) };
   }
+
+  function normalizeAngle(angle) {
+    return ((angle + Math.PI) % (Math.PI * 2)) - Math.PI;
+  }
+
+    function getScanTarget() {
+      let best = null;
+      let fallback = null;
+      for (const current of activeSectors) {
+        if (!current.endZone) {
+          continue;
+        }
+        const tx = current.endZone.x + current.endZone.width / 2;
+        const ty = current.endZone.y + current.endZone.height / 2;
+        const dx = tx - ship.x;
+        const dy = ty - ship.y;
+        const dist = Math.hypot(dx, dy);
+        const weight = current === sector ? 0.7 : 1;
+        const score = dist * weight;
+        const entry = { x: tx, y: ty, dist, score };
+        if (!current.goalDelivered) {
+          if (!best || score < best.score) {
+            best = entry;
+          }
+        } else if (!fallback || score < fallback.score) {
+          fallback = entry;
+        }
+      }
+      return best ?? fallback;
+    }
+
+    function getLockedSurveyTarget() {
+      if (autopilotTarget) {
+        const dx = autopilotTarget.x - ship.x;
+        const dy = autopilotTarget.y - ship.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist <= AUTOPILOT.TARGET.BRAKE_DISTANCE * 0.6) {
+          autopilotTarget = null;
+        } else {
+          let stillValid = false;
+          for (const current of activeSectors) {
+            if (!current.endZone) {
+              continue;
+            }
+            const tx = current.endZone.x + current.endZone.width / 2;
+            const ty = current.endZone.y + current.endZone.height / 2;
+            if (Math.hypot(tx - autopilotTarget.x, ty - autopilotTarget.y) < 1) {
+              stillValid = true;
+              break;
+            }
+          }
+          if (!stillValid) {
+            autopilotTarget = null;
+          }
+        }
+      }
+      if (!autopilotTarget) {
+        autopilotTarget = getScanTarget();
+      }
+      return autopilotTarget;
+    }
+
+  function getFuelTarget() {
+    let best = null;
+    for (const fuel of fuelPickups) {
+      const dx = fuel.x - ship.x;
+      const dy = fuel.y - ship.y;
+      const dist = Math.hypot(dx, dy);
+      if (!best || dist < best.dist) {
+        best = { x: fuel.x, y: fuel.y, dist };
+      }
+    }
+    return best;
+  }
+
+  function closestPointOnSegment(px, py, ax, ay, bx, by) {
+    const abx = bx - ax;
+    const aby = by - ay;
+    const apx = px - ax;
+    const apy = py - ay;
+    const denom = abx * abx + aby * aby;
+    if (denom === 0) {
+      return { x: ax, y: ay, t: 0 };
+    }
+    let t = (apx * abx + apy * aby) / denom;
+    t = clampValue(t, 0, 1);
+    return { x: ax + abx * t, y: ay + aby * t, t };
+  }
+
+  function getClosestRiverInfo(pos, rivers) {
+    let best = null;
+    for (const river of rivers) {
+      const points = river?.points;
+      if (!points || points.length < 2) {
+        continue;
+      }
+      for (let i = 0; i < points.length - 1; i++) {
+        const a = points[i];
+        const b = points[i + 1];
+        const hit = closestPointOnSegment(pos.x, pos.y, a.x, a.y, b.x, b.y);
+        const dx = pos.x - hit.x;
+        const dy = pos.y - hit.y;
+        const dist = Math.hypot(dx, dy);
+        if (!best || dist < best.dist) {
+          const segX = b.x - a.x;
+          const segY = b.y - a.y;
+          const segLen = Math.hypot(segX, segY) || 1;
+          best = {
+            dist,
+            width: river.width ?? RIVER.WIDTH_MIN,
+            closestX: hit.x,
+            closestY: hit.y,
+            tangentX: segX / segLen,
+            tangentY: segY / segLen
+          };
+        }
+      }
+    }
+    return best;
+  }
+
+    function getAutopilotAvoidance(activeStations) {
+      const avoid = { x: 0, y: 0 };
+      let closest = Infinity;
+
+    const addRepulsion = (hx, hy, limit, weight = 1) => {
+      if (!Number.isFinite(limit) || limit <= 0) {
+        return;
+      }
+      const dx = ship.x - hx;
+      const dy = ship.y - hy;
+      const dist = Math.hypot(dx, dy);
+      if (dist <= 0 || dist > limit) {
+        return;
+      }
+      const strength = Math.pow(1 - dist / limit, 2) * weight;
+      avoid.x += (dx / dist) * strength;
+      avoid.y += (dy / dist) * strength;
+      if (dist < closest) {
+        closest = dist;
+      }
+    };
+
+      for (const activeSector of activeSectors) {
+        if (activeSector.beacon) {
+          const radius = activeSector.beacon.radius ?? BEACON.OBSERVER_RADIUS;
+          const limit = radius + AUTOPILOT.AVOID.BEACON_BUFFER;
+          addRepulsion(activeSector.beacon.x, activeSector.beacon.y, limit, 1.2);
+        }
+    }
+
+    for (const station of activeStations) {
+      const limit = (station.safeRadius ?? STATION.SAFE_ZONE_RADIUS) + AUTOPILOT.AVOID.STATION_BUFFER;
+      addRepulsion(station.x, station.y, limit, 1.4);
+    }
+
+      return { avoid, closest };
+    }
+
+    function getAsteroidThreat(asteroid, horizonTime, buffer) {
+      const relX = asteroid.x - ship.x;
+      const relY = asteroid.y - ship.y;
+      const relVx = (asteroid.vx ?? 0) - ship.vx;
+      const relVy = (asteroid.vy ?? 0) - ship.vy;
+      const speedSq = relVx * relVx + relVy * relVy;
+      let t = 0;
+      if (speedSq > 0.001) {
+        t = -((relX * relVx + relY * relVy) / speedSq);
+      }
+      if (!Number.isFinite(t) || t < 0 || t > horizonTime) {
+        return null;
+      }
+      const cx = relX + relVx * t;
+      const cy = relY + relVy * t;
+      const dist = Math.hypot(cx, cy);
+      if (dist > buffer) {
+        return null;
+      }
+      return {
+        asteroid,
+        t,
+        dist,
+        buffer,
+        px: asteroid.x + (asteroid.vx ?? 0) * t,
+        py: asteroid.y + (asteroid.vy ?? 0) * t
+      };
+    }
+
+    function getCourseAvoidance(desiredDir, lookaheadDist, activeStars, asteroidThreats) {
+      let closest = Infinity;
+      let hazard = null;
+      const ax = ship.x;
+      const ay = ship.y;
+      const bx = ship.x + desiredDir.x * lookaheadDist;
+      const by = ship.y + desiredDir.y * lookaheadDist;
+
+      for (const star of activeStars) {
+        const bodyRadius = star.radius ?? 0;
+        const limit = bodyRadius + AUTOPILOT.AVOID.STAR_BODY_BUFFER + AUTOPILOT.COURSE.CORRIDOR_RADIUS;
+        if (!Number.isFinite(limit) || limit <= 0) {
+          continue;
+        }
+        const hit = closestPointOnSegment(star.x, star.y, ax, ay, bx, by);
+        const dx = star.x - hit.x;
+        const dy = star.y - hit.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < limit && dist < closest) {
+          closest = dist;
+          hazard = { x: star.x, y: star.y };
+        }
+      }
+
+      for (const threat of asteroidThreats) {
+        if (threat.dist < threat.buffer && threat.dist < closest) {
+          closest = threat.dist;
+          hazard = { x: threat.px, y: threat.py };
+        }
+      }
+
+      if (!hazard) {
+        return { desiredDir, closest };
+      }
+      const toHx = hazard.x - ship.x;
+      const toHy = hazard.y - ship.y;
+      const cross = desiredDir.x * toHy - desiredDir.y * toHx;
+      const steerSign = cross === 0 ? 1 : Math.sign(cross);
+      const steerAngle = (AUTOPILOT.COURSE.AVOID_ANGLE_DEG * Math.PI) / 180;
+      const adjusted = rotateVector(desiredDir, -steerSign * steerAngle);
+      return { desiredDir: adjusted, closest };
+    }
+
+    function computeAutopilotInput(dt, activeStars, activeStations) {
+      const fuelRatio = ship.maxFuel > 0 ? ship.fuel / ship.maxFuel : 0;
+      const avoidData = getAutopilotAvoidance(activeStations);
+      let desired = null;
+      let targetDist = 0;
+
+    const avoidMag = Math.hypot(avoidData.avoid.x, avoidData.avoid.y);
+    if (avoidMag > 0.001) {
+      desired = { x: avoidData.avoid.x, y: avoidData.avoid.y };
+      targetDist = avoidMag;
+    } else {
+        const surveyTarget = getLockedSurveyTarget();
+      const fuelTarget = getFuelTarget();
+
+      let target = null;
+      if (fuelRatio < AUTOPILOT.FUEL.CRITICAL && fuelTarget) {
+        target = fuelTarget;
+      } else if (surveyTarget) {
+        if (fuelRatio < AUTOPILOT.FUEL.MID && fuelTarget) {
+          const toSurvey = { x: surveyTarget.x - ship.x, y: surveyTarget.y - ship.y };
+          const toFuel = { x: fuelTarget.x - ship.x, y: fuelTarget.y - ship.y };
+          const distFuel = fuelTarget.dist;
+          const surveyLen = Math.hypot(toSurvey.x, toSurvey.y) || 1;
+          const fuelLen = Math.hypot(toFuel.x, toFuel.y) || 1;
+          const dot = (toSurvey.x * toFuel.x + toSurvey.y * toFuel.y) / (surveyLen * fuelLen);
+          const angle = Math.acos(clampValue(dot, -1, 1));
+          const angleDeg = (angle * 180) / Math.PI;
+          if (distFuel <= AUTOPILOT.TARGET.FUEL_RANGE && angleDeg <= AUTOPILOT.TARGET.FUEL_ANGLE_DEG) {
+            target = fuelTarget;
+          } else {
+            target = surveyTarget;
+          }
+        } else {
+          target = surveyTarget;
+        }
+      } else if (fuelRatio < AUTOPILOT.FUEL.MID && fuelTarget) {
+        target = fuelTarget;
+      }
+
+      if (target) {
+        desired = { x: target.x - ship.x, y: target.y - ship.y };
+        targetDist = target.dist ?? Math.hypot(desired.x, desired.y);
+      } else {
+        const dx = ship.x - originX;
+        const dy = ship.y - originY;
+        const dist = Math.hypot(dx, dy);
+        desired = dist > 1 ? { x: dx, y: dy } : { x: 1, y: 0 };
+        targetDist = dist;
+      }
+    }
+
+      const desiredMag = Math.hypot(desired.x, desired.y) || 1;
+      let desiredDir = { x: desired.x / desiredMag, y: desired.y / desiredMag };
+
+      const lookaheadDist = AUTOPILOT.COURSE.LOOKAHEAD_DIST;
+      const shipSpeed = Math.hypot(ship.vx, ship.vy);
+      const lookaheadTimeRaw = lookaheadDist / Math.max(60, shipSpeed);
+      const lookaheadTime = Math.min(AUTOPILOT.COURSE.LOOKAHEAD_TIME_MAX, lookaheadTimeRaw);
+      const asteroidThreats = [];
+      for (const activeSector of activeSectors) {
+        for (const asteroid of activeSector.asteroids) {
+          const buffer = (asteroid.radius ?? 0) + SHIP_RADIUS + AUTOPILOT.AVOID.ASTEROID_BODY_BUFFER;
+          const threat = getAsteroidThreat(asteroid, lookaheadTime, buffer);
+          if (threat) {
+            asteroidThreats.push(threat);
+          }
+        }
+      }
+      const courseAdjust = getCourseAvoidance(desiredDir, lookaheadDist, activeStars, asteroidThreats);
+      desiredDir = courseAdjust.desiredDir;
+
+      const riverInfo = getClosestRiverInfo(ship, sector?.runtimeRivers ?? []);
+      if (riverInfo && riverInfo.dist < (riverInfo.width / 2)) {
+        const flowDot = desiredDir.x * riverInfo.tangentX + desiredDir.y * riverInfo.tangentY;
+        if (flowDot < AUTOPILOT.RIVER.ALIGN_DOT_MIN) {
+          const outX = ship.x - riverInfo.closestX;
+          const outY = ship.y - riverInfo.closestY;
+          const outMag = Math.hypot(outX, outY) || 1;
+          desiredDir = { x: outX / outMag, y: outY / outMag };
+          targetDist = outMag;
+        }
+      }
+
+      const starAccel = computeStarAccelAt(ship, activeStars, CONFIG);
+      const accelMag = Math.hypot(starAccel.ax, starAccel.ay);
+      if (accelMag > 0) {
+        const ax = starAccel.ax / accelMag;
+        const ay = starAccel.ay / accelMag;
+        const ref = Math.max(1, SHIP.THRUST * AUTOPILOT.GRAVITY.THRUST_RATIO);
+        const blend = clampValue(accelMag / ref, 0, AUTOPILOT.GRAVITY.MAX_BLEND);
+        desiredDir = {
+          x: desiredDir.x - ax * blend * AUTOPILOT.GRAVITY.COMPENSATION,
+          y: desiredDir.y - ay * blend * AUTOPILOT.GRAVITY.COMPENSATION
+        };
+      }
+
+      if (AUTOPILOT.GRAVITY.CLOSE_PUSH > 0) {
+        for (const star of activeStars) {
+          const dx = ship.x - star.x;
+          const dy = ship.y - star.y;
+          const dist = Math.hypot(dx, dy);
+          const bodyRadius = star.radius ?? 0;
+          const limit = bodyRadius + AUTOPILOT.AVOID.STAR_BODY_BUFFER;
+          if (dist > 0 && dist < limit) {
+            const push = (1 - dist / limit) * AUTOPILOT.GRAVITY.CLOSE_PUSH;
+            desiredDir.x += (dx / dist) * push;
+            desiredDir.y += (dy / dist) * push;
+          }
+        }
+      }
+
+      const normalizedMag = Math.hypot(desiredDir.x, desiredDir.y) || 1;
+      desiredDir = { x: desiredDir.x / normalizedMag, y: desiredDir.y / normalizedMag };
+
+      const baseSpeed = AUTOPILOT.THRUST.CRUISE_SPEED;
+      let desiredSpeed = baseSpeed;
+      if (Number.isFinite(targetDist)) {
+        const coastSpeed = targetDist / Math.max(0.1, AUTOPILOT.THRUST.COAST_TIME);
+        desiredSpeed = Math.min(baseSpeed, coastSpeed);
+        if (targetDist > AUTOPILOT.TARGET.BRAKE_DISTANCE) {
+          desiredSpeed = Math.max(desiredSpeed, AUTOPILOT.THRUST.SPEED_FLOOR);
+        }
+      }
+
+      const desiredVel = {
+        x: desiredDir.x * desiredSpeed,
+        y: desiredDir.y * desiredSpeed
+      };
+      const errorVel = {
+        x: desiredVel.x - ship.vx,
+        y: desiredVel.y - ship.vy
+      };
+      const errorMag = Math.hypot(errorVel.x, errorVel.y);
+      const steeringDir = errorMag > 0.5
+        ? { x: errorVel.x / errorMag, y: errorVel.y / errorMag }
+        : desiredDir;
+
+      const desiredHeading = Math.atan2(steeringDir.x, -steeringDir.y);
+      const angleDiff = normalizeAngle(desiredHeading - ship.heading);
+      const rotationInput = clampValue(angleDiff / (Math.PI / 4), -1, 1);
+      const angleDeg = Math.abs(angleDiff) * (180 / Math.PI);
+      let thrustInput = 0;
+      let thrustWanted = 0;
+      if (angleDeg < AUTOPILOT.TARGET.THRUST_ANGLE_DEG) {
+        const errorRatio = baseSpeed > 0 ? errorMag / baseSpeed : 0;
+        const align = Math.max(0, Math.cos(angleDiff));
+        thrustWanted = clampValue(errorRatio, 0, 1);
+        thrustWanted *= Math.pow(align, AUTOPILOT.THRUST.ALIGN_POWER);
+        if (Number.isFinite(targetDist) && targetDist > AUTOPILOT.TARGET.BRAKE_DISTANCE) {
+          const minPower = AUTOPILOT.THRUST.MIN_POWER ?? 0;
+          if (thrustWanted > 0 && thrustWanted < minPower) {
+            thrustWanted = minPower;
+          }
+        }
+      }
+      if (thrustWanted > 0) {
+        if (AUTOPILOT.THRUST.BURST_COOLDOWN <= 0 || AUTOPILOT.THRUST.BURST_MIN <= 0) {
+          autopilotThrustBurst = 0;
+          autopilotThrustCooldown = 0;
+          thrustInput = thrustWanted;
+        } else {
+          if (autopilotThrustBurst <= 0 && autopilotThrustCooldown <= 0) {
+            autopilotThrustBurst = AUTOPILOT.THRUST.BURST_MIN;
+          }
+          if (autopilotThrustBurst > 0 && autopilotThrustCooldown <= 0) {
+            thrustInput = thrustWanted;
+          }
+        }
+      } else {
+        autopilotThrustBurst = 0;
+      }
+
+      const hazardClear = avoidData.closest > AUTOPILOT.FIRE.HAZARD_CLEAR_DIST;
+      const forward = { x: Math.sin(ship.heading), y: -Math.cos(ship.heading) };
+      const coneRad = (AUTOPILOT.FIRE.CONE_DEG * Math.PI) / 180;
+      const maxRange = Math.min(ENEMY_FIRE_RANGE, BULLET.SPEED * BULLET.LIFE * AUTOPILOT.FIRE.RANGE_MULT);
+      let fire = false;
+
+      if (autopilotFirePause <= 0 && hazardClear) {
+        for (const threat of asteroidThreats) {
+          const dx = threat.px - ship.x;
+          const dy = threat.py - ship.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist > maxRange || dist <= 0) {
+            continue;
+          }
+          const dot = (forward.x * dx + forward.y * dy) / dist;
+          const angle = Math.acos(clampValue(dot, -1, 1));
+          if (angle <= coneRad) {
+            fire = true;
+            break;
+          }
+        }
+        if (!fire) {
+          for (const enemy of enemies) {
+            const dx = enemy.x - ship.x;
+            const dy = enemy.y - ship.y;
+            const dist = Math.hypot(dx, dy);
+            if (dist > maxRange || dist <= 0) {
+              continue;
+            }
+            const dot = (forward.x * dx + forward.y * dy) / dist;
+            const angle = Math.acos(clampValue(dot, -1, 1));
+            if (angle <= coneRad) {
+              fire = true;
+              break;
+            }
+          }
+        }
+        if (!fire) {
+          for (const activeSector of activeSectors) {
+            for (const asteroid of activeSector.asteroids) {
+              const dx = asteroid.x - ship.x;
+              const dy = asteroid.y - ship.y;
+              const dist = Math.hypot(dx, dy);
+              if (dist > maxRange || dist <= 0) {
+                continue;
+              }
+              const dot = (forward.x * dx + forward.y * dy) / dist;
+              const angle = Math.acos(clampValue(dot, -1, 1));
+              if (angle <= coneRad) {
+                fire = true;
+                break;
+              }
+            }
+            if (fire) {
+              break;
+            }
+          }
+        }
+      }
+
+      return { rotationInput, thrustInput, fire };
+    }
 
   function getNearestCalibrationTarget() {
     let best = null;
@@ -791,6 +1820,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
 
   function createChainGateSeries(viewRadius, bounds, dir, margin) {
     const type = CALIBRATION_GATE.TYPES.CHAIN;
+    const axis = { x: -dir.y, y: dir.x };
     const apertureWidth = getGateWidth(type);
     const poleRadius = apertureWidth * CALIBRATION_GATE.POLE_RATIO;
     const halfSpan = apertureWidth / 2 + poleRadius;
@@ -805,19 +1835,24 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
 
     const turnDir = Math.random() < 0.5 ? -1 : 1;
     for (let attempt = 0; attempt < CALIBRATION_GATE.CHAIN_ATTEMPTS; attempt++) {
-      const radius = randomRange(minDist, maxDist);
       const span = randomRange(CALIBRATION_GATE.CHAIN_ARC_MIN, CALIBRATION_GATE.CHAIN_ARC_MAX);
       const step = chainCount > 1 ? span / (chainCount - 1) : 0;
-      const start = 0;
+      const baseDist = minDist;
+      const forwardSpan = Math.max(0, maxDist - baseDist);
+      const radius = forwardSpan > 0
+        ? forwardSpan / Math.max(0.15, Math.sin(span))
+        : maxDist;
       const gates = [];
       let valid = true;
 
       for (let i = 0; i < chainCount; i++) {
-        const arcDir = rotateVector(dir, (start + step * i) * turnDir);
-        const pathDir = rotateVector(arcDir, turnDir * (Math.PI / 2));
+        const angle = step * i;
+        const forward = baseDist + radius * Math.sin(angle);
+        const lateral = radius * (1 - Math.cos(angle)) * turnDir;
+        const pathDir = rotateVector(dir, angle * turnDir);
         const candidate = {
-          x: ship.x + arcDir.x * radius,
-          y: ship.y + arcDir.y * radius
+          x: ship.x + dir.x * forward + axis.x * lateral,
+          y: ship.y + dir.y * forward + axis.y * lateral
         };
         if (!isWithinBounds(candidate, bounds, margin)) {
           valid = false;
@@ -881,13 +1916,11 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       const dist = Math.hypot(dx, dy) || 1;
       const dirX = dx / dist;
       const dirY = dy / dist;
-      const offset = Math.max(CALIBRATION_GATE.EXCLUSION_RADIUS, 240);
-      ship.x = target.x - dirX * offset;
-      ship.y = target.y - dirY * offset;
-      lastShipX = ship.x;
-      lastShipY = ship.y;
-      lastTrailX = ship.x;
-      lastTrailY = ship.y;
+        const offset = Math.max(CALIBRATION_GATE.EXCLUSION_RADIUS, 240);
+        ship.x = target.x - dirX * offset;
+        ship.y = target.y - dirY * offset;
+        lastTrailX = ship.x;
+        lastTrailY = ship.y;
       trail.length = 0;
       const heading = Math.atan2(dx, -dy);
       ship.heading = heading;
@@ -1110,7 +2143,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
   }
 
   function saveStateIfNeeded() {
-    if (!gameState) {
+    if (!gameState || !allowPersistence) {
       return;
     }
     if (!stateDirty) {
@@ -1155,8 +2188,10 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       return;
     }
     deathPauseActive = true;
+    setAutopilotActive(false, true);
     ship.stopThrustLoop();
     ship.stopRotateLoop();
+    sounds.stopLoop("at_station");
     if (deathModal && typeof deathModal.close === "function") {
       deathModal.close();
     }
@@ -1172,6 +2207,15 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
   }
 
   function handleLifeLoss(explosionType) {
+    if (demoMode) {
+      if (explosionType) {
+        spawnExplosion(particles, ship.x, ship.y, explosionType);
+      }
+      lives = maxLives;
+      shipVisible = true;
+      respawn();
+      return;
+    }
     triggerShake(SHAKE.HIT);
     if (explosionType) {
       spawnExplosion(particles, ship.x, ship.y, explosionType);
@@ -1201,6 +2245,86 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     return sector ? `${sector.sx},${sector.sy}` : "";
   }
 
+  function ensureStationMetaForSector(sx, sy) {
+    if (!Number.isFinite(sx) || !Number.isFinite(sy)) {
+      return null;
+    }
+    const ring = Math.max(Math.abs(sx), Math.abs(sy));
+    const existing = getSectorMeta(sectorIndex, sx, sy) ?? {};
+    const info = getStationInfoForSector(sectorManager.worldSeed, sx, sy, ring);
+    let updated = false;
+    if (existing.hasStation === undefined) {
+      existing.hasStation = Boolean(info?.hasStation);
+      updated = true;
+    }
+    if (existing.hasStation) {
+      if (!existing.stationId && info?.stationId) {
+        existing.stationId = info.stationId;
+        updated = true;
+      }
+      if (existing.stationTierCap === undefined) {
+        existing.stationTierCap = info?.tierCap ?? null;
+        updated = true;
+      }
+      if (!existing.stationPos) {
+        const rng = createRng(sectorManager.getSectorSeed(sx, sy, SECTOR.SEED_SALT.STATION));
+        const bounds = sectorManager.getBounds(sx, sy);
+        const safePoint = {
+          x: bounds.x + bounds.size / 2,
+          y: bounds.y + bounds.size / 2
+        };
+        existing.stationPos = pickStationPosition(rng, bounds, safePoint, SECTOR.ENTRY_SAFE_RADIUS, existing.beaconPosition);
+        updated = true;
+      }
+      if (existing.stationDiscovered === undefined) {
+        existing.stationDiscovered = Boolean(info?.isStartStation);
+        updated = true;
+      }
+    } else if (existing.stationDiscovered === undefined) {
+      existing.stationDiscovered = false;
+      updated = true;
+    }
+    if (updated) {
+      setSectorMeta(sectorIndex, sx, sy, existing);
+      if (allowPersistence) {
+        saveSectorIndex(sectorIndex);
+      }
+    }
+    return existing;
+  }
+
+  function updateStationDiscovery() {
+    if (!sector) {
+      return [];
+    }
+    const range = Math.floor(STATION.SCAN_RANGE_CELLS / 2);
+    const markers = [];
+    for (let dx = -range; dx <= range; dx++) {
+      for (let dy = -range; dy <= range; dy++) {
+        const sx = sector.sx + dx;
+        const sy = sector.sy + dy;
+        const meta = ensureStationMetaForSector(sx, sy);
+        if (!meta?.hasStation || !meta.stationPos) {
+          continue;
+        }
+        if (!meta.stationDiscovered) {
+          meta.stationDiscovered = true;
+          setSectorMeta(sectorIndex, sx, sy, meta);
+          if (allowPersistence) {
+            saveSectorIndex(sectorIndex);
+          }
+        }
+        markers.push({
+          x: meta.stationPos.x,
+          y: meta.stationPos.y,
+          sx,
+          sy
+        });
+      }
+    }
+    return markers;
+  }
+
   function ensureSectorMeta(sector) {
     if (!sector) {
       return null;
@@ -1209,23 +2333,30 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     if (meta) {
       return meta;
     }
-    const fallback = {
-      sectorType: sector.sectorType ?? SECTOR_TYPES.GENERIC,
-      sectorMood: sector.sectorMood ?? "NEUTRAL",
-      beaconPlaced: Boolean(sector.beacon),
-      beaconPosition: sector.beacon ? { x: sector.beacon.x, y: sector.beacon.y } : null,
-      generatedAtExposure: Math.max(0, gameState?.beacon?.exposure ?? 0),
-      visited: false,
-      surveyComplete: false,
-      lastVisitedAt: null,
-      anomalyModifier: sector.anomalyModifier ?? null,
+      const fallback = {
+        sectorType: sector.sectorType ?? SECTOR_TYPES.GENERIC,
+        sectorMood: sector.sectorMood ?? "NEUTRAL",
+        beaconPlaced: Boolean(sector.beacon),
+        beaconPosition: sector.beacon ? { x: sector.beacon.x, y: sector.beacon.y } : null,
+        hasStation: Boolean(sector.station),
+        stationId: sector.station?.id ?? null,
+        stationPos: sector.station ? { x: sector.station.x, y: sector.station.y } : null,
+        stationDiscovered: Boolean(sector.station?.discovered),
+        stationTierCap: sector.station?.tierCap ?? null,
+        generatedAtExposure: Math.max(0, gameState?.beacon?.exposure ?? 0),
+        visited: false,
+        surveyComplete: false,
+        lastVisitedAt: null,
+        anomalyModifier: sector.anomalyModifier ?? null,
       echoTag: sector.echoTag ?? null,
       patternId: sector.patternId ?? null,
       patternParamsSeed: Number.isFinite(sector.patternParamsSeed) ? sector.patternParamsSeed : null,
       patternVersion: Number.isFinite(sector.patternVersion) ? sector.patternVersion : null
     };
     setSectorMeta(sectorIndex, sector.sx, sector.sy, fallback);
-    saveSectorIndex(sectorIndex);
+    if (allowPersistence) {
+      saveSectorIndex(sectorIndex);
+    }
     return fallback;
   }
 
@@ -1236,7 +2367,9 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     }
     updater(meta);
     setSectorMeta(sectorIndex, sector.sx, sector.sy, meta);
-    saveSectorIndex(sectorIndex);
+    if (allowPersistence) {
+      saveSectorIndex(sectorIndex);
+    }
     return meta;
   }
 
@@ -1598,6 +2731,106 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     }
   }
 
+  function updateIntro(dt, activeStars, simulationIsRunning) {
+    if (!intro.enabled || !INTRO || !simulationIsRunning) {
+      return;
+    }
+    intro.clock += dt;
+
+    for (let i = intro.highlightQueue.length - 1; i >= 0; i--) {
+      const entry = intro.highlightQueue[i];
+      if (alertClock >= entry.start) {
+        triggerIntroHighlight(entry.key, entry.duration);
+        intro.highlightQueue.splice(i, 1);
+      }
+    }
+    if (intro.releaseAlertsAt !== null && alertClock >= intro.releaseAlertsAt) {
+      intro.suppressAlerts = false;
+      intro.releaseAlertsAt = null;
+    }
+
+    for (const key of Object.keys(intro.highlights)) {
+      if (intro.highlights[key] > 0) {
+        intro.highlights[key] = Math.max(0, intro.highlights[key] - dt);
+      }
+    }
+
+    if (!intro.flags.systems && intro.clock >= INTRO.START_DELAY) {
+      scheduleIntroAlert("systems", "Systems online. Survey and exit freely.");
+    }
+
+    if (!intro.flags.goals && intro.controlUsed) {
+      scheduleIntroAlert("goals", "Survey targets increase score. Exits move you onward.", {
+        highlightKeys: ["goal", "exit"],
+        highlightDuration: INTRO.HIGHLIGHT_DURATION
+      });
+    }
+
+    if (!intro.flags.score && (intro.firstSurveyComplete || intro.clock >= INTRO.SCORE_TIMEOUT)) {
+      scheduleIntroAlert("score", "Momentum matters. Chains and distance amplify score.", {
+        highlightKeys: ["score"],
+        highlightDuration: INTRO.HIGHLIGHT_DURATION
+      });
+    }
+
+    if (!intro.flags.fuel && ship.maxFuel > 0) {
+      const ratio = ship.fuel / ship.maxFuel;
+      if (ratio <= INTRO.FUEL_RATIO) {
+        scheduleIntroAlert("fuel", "Fuel is freedom. Drift wisely.", {
+          highlightKeys: ["fuel"],
+          highlightDuration: INTRO.HIGHLIGHT_DURATION
+        });
+      }
+    }
+
+    const ring = Math.max(Math.abs(sector?.sx ?? 0), Math.abs(sector?.sy ?? 0));
+    if (!intro.flags.weird && (intro.sectorTransitions >= 1 || ring >= 1)) {
+      scheduleIntroAlert("weird", "Space is not uniform. Patterns emerge further out.", {
+        highlightKeys: ["vignette"],
+        highlightDuration: INTRO.VIGNETTE_DURATION
+      });
+    }
+
+    if (!intro.flags.rivers) {
+      const riverInfo = getClosestRiverInfo(ship, sector?.runtimeRivers ?? []);
+      if (riverInfo && riverInfo.dist < (riverInfo.width / 2)) {
+        scheduleIntroAlert("rivers", "Currents shape motion. Ride them.", {
+          highlightKeys: ["river"],
+          highlightDuration: INTRO.RIVER_HIGHLIGHT_DURATION
+        });
+      }
+    }
+
+    if (!intro.flags.stars && Array.isArray(activeStars) && activeStars.length > 0) {
+      const accel = computeStarAccelAt(ship, activeStars, CONFIG);
+      const accelMag = Math.hypot(accel.ax, accel.ay);
+      if (accelMag >= INTRO.STAR_PULL_ACCEL) {
+        scheduleIntroAlert("stars", "Stars bend paths. Respect their pull.");
+      }
+    }
+
+    if (!intro.flags.distance && intro.sectorTransitions >= INTRO.LONGRUN_TRANSITIONS) {
+      scheduleIntroAlert("distance", "Distance is remembered.", {
+        highlightKeys: ["score"],
+        highlightDuration: INTRO.HIGHLIGHT_DURATION,
+        releaseAlerts: true
+      });
+    }
+
+    if (!intro.flags.anomaly && sector?.sectorType === SECTOR_TYPES.ANOMALY) {
+      scheduleIntroAlert("anomaly", "Not everything here is inert.");
+    }
+    if (!intro.flags.echo && sector?.sectorType === SECTOR_TYPES.ECHO) {
+      scheduleIntroAlert("echo", "Not everything here is inert.");
+    }
+    if (!intro.flags.movingStars && Array.isArray(activeStars) && activeStars.some((star) => star.motion)) {
+      scheduleIntroAlert("movingStars", "Not everything here is inert.");
+    }
+    if (!intro.flags.station && sector?.station) {
+      scheduleIntroAlert("station", "Not everything here is inert.");
+    }
+  }
+
   function updateScorePopups(dt) {
     if (scorePopups.length === 0) {
       return;
@@ -1629,7 +2862,6 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
 
   function update(dt) {
     updateParticles(particles, dt);
-    updateEnemyBullets(enemyBullets, enemies, ship, SHIP_RADIUS, invulnTimer, shipVisible, handleLifeLoss, dt);
     updateEnemyPings(enemyPings, dt);
     updateAlerts(dt);
     updateScorePopups(dt);
@@ -1667,11 +2899,32 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       saveStateIfNeeded();
       return;
     }
-    const controlsDisabled = controlsDisabledTimer > 0;
+    const controlsDisabled = controlsDisabledTimer > 0 || docked;
+    const inputBlocked = controlsDisabledTimer > 0;
+    if (autopilotFirePause > 0) {
+      autopilotFirePause = Math.max(0, autopilotFirePause - dt);
+    }
+    if (autopilotThrustBurst > 0) {
+      autopilotThrustBurst = Math.max(0, autopilotThrustBurst - dt);
+      if (autopilotThrustBurst === 0) {
+        autopilotThrustCooldown = AUTOPILOT.THRUST.BURST_COOLDOWN;
+      }
+    } else if (autopilotThrustCooldown > 0) {
+      autopilotThrustCooldown = Math.max(0, autopilotThrustCooldown - dt);
+    }
+    const toggleKeyHeld = keys["p"];
+    if (!docked && toggleKeyHeld && !lastAutopilotKey) {
+      setAutopilotActive(!autopilotActive, true);
+    }
+    lastAutopilotKey = Boolean(toggleKeyHeld);
+    const autopilotEngaged = autopilotActive && !inputBlocked && !docked;
     let externalInput = null;
+    let autopilotFire = false;
     let keyboardRotationInput = 0;
     let keyboardThrustInput = 0;
-    if (!controlsDisabled) {
+    let shipInSafeZone = false;
+    let shipFullyInsideSafeZone = false;
+    if (!inputBlocked && !autopilotEngaged) {
       if (keys["arrowleft"] || keys["a"]) keyboardRotationInput -= 1;
       if (keys["arrowright"] || keys["d"]) keyboardRotationInput += 1;
       if (keys["arrowup"] || keys["w"]) keyboardThrustInput = 1;
@@ -1710,10 +2963,31 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
         }
       }
     }
-    if (controlsDisabled) {
-      externalInput = { disableControls: true };
-    }
-    ship.update(dt, externalInput);
+      if (autopilotEngaged) {
+        const autopilotStations = getActiveStations();
+        const autopilotStars = activeSectors.flatMap((s) => s.stars);
+        const autopilotResult = computeAutopilotInput(dt, autopilotStars, autopilotStations);
+        externalInput = {
+          rotationInput: autopilotResult.rotationInput,
+          thrustInput: autopilotResult.thrustInput
+        };
+        autopilotFire = autopilotResult.fire;
+      } else if (controlsDisabled) {
+        externalInput = { disableControls: true };
+      }
+      if (intro.enabled && !inputBlocked && !autopilotEngaged) {
+        const manualInputUsed = keyboardRotationInput !== 0
+          || keyboardThrustInput !== 0
+          || (externalInput && (
+            externalInput.thrustInput !== undefined
+            || externalInput.rotationInput !== undefined
+            || Number.isFinite(externalInput.aimAngle)
+          ));
+        if (manualInputUsed) {
+          intro.controlUsed = true;
+        }
+      }
+      ship.update(dt, externalInput);
     applyGateCorrection(dt);
     spawnThrustParticles(dt);
     timeSpent += dt;
@@ -1729,7 +3003,6 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     if (scorePulse > 0) {
       scorePulse = Math.max(0, scorePulse - dt * 2.6);
     }
-    updateBullets(bullets, dt);
 
     sector = sectorManager.getSectorForPosition(ship.x, ship.y);
     activeSectors = sectorManager.getSectorsAround(ship.x, ship.y, ACTIVE_SECTOR_RANGE);
@@ -1737,6 +3010,77 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       const shipPos = activeSector === sector ? { x: ship.x, y: ship.y } : null;
       updateSectorRivers(activeSector, shipPos);
     }
+    stationMarkers = updateStationDiscovery();
+    const activeStations = getActiveStations();
+    updateBullets(bullets, dt, activeStations);
+    updateEnemyBullets(enemyBullets, enemies, ship, SHIP_RADIUS, invulnTimer, shipVisible, handleLifeLoss, dt, activeStations);
+
+    const currentStation = sector?.station ?? null;
+    let stationDx = 0;
+    let stationDy = 0;
+    let stationDist = 0;
+    let stationSafeRadius = 0;
+    if (currentStation) {
+      stationDx = ship.x - currentStation.x;
+      stationDy = ship.y - currentStation.y;
+      stationDist = Math.hypot(stationDx, stationDy);
+      stationSafeRadius = currentStation.safeRadius ?? STATION.SAFE_ZONE_RADIUS;
+      shipInSafeZone = stationDist <= stationSafeRadius;
+      shipFullyInsideSafeZone = stationDist <= (stationSafeRadius - SHIP_RADIUS);
+    }
+    if (!shipInSafeZone) {
+      stationEntryLockId = null;
+    }
+    const interactHeld = keys["e"] || (docked && keys[" "]);
+    const escapeHeld = keys["escape"];
+    const interactTriggered = Boolean(interactPressed || (interactHeld && !lastInteractHeld));
+    const escapeTriggered = Boolean(escapeHeld && !lastEscapeHeld);
+    lastInteractHeld = interactHeld;
+    lastEscapeHeld = escapeHeld;
+    interactPressed = false;
+
+    if (!docked && currentStation && shipFullyInsideSafeZone && stationEntryLockId !== currentStation.id) {
+      stationEntryLockId = currentStation.id;
+      setAutopilotActive(false, true);
+      docked = true;
+      dockStation = currentStation;
+      const dist = stationDist || 1;
+      const dirX = dist > 0 ? stationDx / dist : Math.sin(ship.heading);
+      const dirY = dist > 0 ? stationDy / dist : -Math.cos(ship.heading);
+      const targetDist = Math.max(0, stationSafeRadius - SHIP_RADIUS - 1);
+      ship.x = currentStation.x + dirX * targetDist;
+      ship.y = currentStation.y + dirY * targetDist;
+      ship.vx = 0;
+      ship.vy = 0;
+      ship.stopThrustLoop();
+      ship.stopRotateLoop();
+      ship.thrusting = 0;
+      openUpgradeModal(currentStation);
+    }
+
+    if (docked) {
+      if (!currentStation || dockStation?.id !== currentStation.id) {
+        docked = false;
+        dockStation = null;
+        closeUpgradeModal();
+      } else if (interactTriggered || escapeTriggered) {
+        docked = false;
+        dockStation = null;
+        closeUpgradeModal();
+      }
+    }
+    if (interactButton) {
+      interactButton.style.display = docked ? "block" : "none";
+    }
+    if (shipInSafeZone) {
+      sounds.startLoop("at_station", 2, 0.2);
+    } else {
+      sounds.stopLoop("at_station");
+    }
+
+    const collectorStats = getCollectorStats(upgradeLevels.collectorLevel);
+    applyCollectorPull(fuelPickups, collectorStats, dt);
+    applyCollectorPull(resourcePickups, collectorStats, dt);
 
     const viewRadius = getViewRadius(canvas, camera);
     if (activeGates.length === 0) {
@@ -1758,6 +3102,11 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
 
     const sectorKey = getSectorKey(sector);
     if (sectorKey && sectorKey !== lastSectorKey) {
+      const sectorCenter = getSectorCenter(sector.sx, sector.sy);
+      const sectorDistance = Math.hypot(sectorCenter.x - originX, sectorCenter.y - originY);
+      if (!farthestSector || sectorDistance > farthestSector.distance) {
+        farthestSector = { sx: sector.sx, sy: sector.sy, distance: sectorDistance };
+      }
       if (lastSectorRef && wasInBeaconZone && wasInActiveMotif && lastSectorRef.sectorType === SECTOR_TYPES.SIGNAL_ORIGIN) {
         if (gameState?.beacon) {
           gameState.beacon.leftMidCycleCount = (gameState.beacon.leftMidCycleCount ?? 0) + 1;
@@ -1836,13 +3185,39 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     wasInActiveMotif = isActiveMotif(beaconSignal.motif);
 
     const activeStars = activeSectors.flatMap((s) => s.stars);
+    updateIntro(dt, activeStars, simulationIsRunning);
     const worldAgeMs = gameState?.worldAgeMs ?? 0;
     const worldAgeSeconds = worldAgeMs / 1000;
+    for (let i = fuelPickups.length - 1; i >= 0; i--) {
+      const pickup = fuelPickups[i];
+      if (pickup.ttlMs !== undefined && pickup.spawnTimeMs !== undefined) {
+        if (worldAgeMs - pickup.spawnTimeMs >= pickup.ttlMs) {
+          fuelPickups.splice(i, 1);
+        }
+      }
+    }
+    for (let i = resourcePickups.length - 1; i >= 0; i--) {
+      const pickup = resourcePickups[i];
+      if (pickup.ttlMs !== undefined && pickup.spawnTimeMs !== undefined) {
+        if (worldAgeMs - pickup.spawnTimeMs >= pickup.ttlMs) {
+          resourcePickups.splice(i, 1);
+        }
+      }
+    }
     for (const activeSector of activeSectors) {
       if (activeSector.beacon && !activeSector.beaconEntity) {
         activeSector.beaconEntity = new BeaconRelic(activeSector.beacon.x, activeSector.beacon.y, {
           size: 190,
           shimmerPhase: (activeSector.sx + activeSector.sy) * 0.5
+        });
+      }
+      if (activeSector.station && !activeSector.stationEntity) {
+        activeSector.stationEntity = new UpgradeStation(activeSector.station.x, activeSector.station.y, {
+          id: activeSector.station.id,
+          safeRadius: activeSector.station.safeRadius,
+          dockRadius: activeSector.station.dockRadius,
+          isStartStation: activeSector.station.isStartStation,
+          tierCap: activeSector.station.tierCap
         });
       }
       if (!activeSector.goalCollected && typeof activeSector.goal.update === "function") {
@@ -1869,16 +3244,30 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       ship.debugGravityY = 0;
     }
 
-    applyForcesToEntity(ship, dt, activeStars, sector?.runtimeRivers ?? [], CONFIG);
-    integrate(ship, dt);
+    const shipRivers = shipInSafeZone ? [] : (sector?.runtimeRivers ?? []);
+      if (docked) {
+        ship.vx = 0;
+        ship.vy = 0;
+      } else {
+        applyForcesToEntity(ship, dt, activeStars, shipRivers, CONFIG);
+        if (autopilotEngaged && AUTOPILOT.SPEED_MAX > 0) {
+          const speed = Math.hypot(ship.vx, ship.vy);
+          if (speed > AUTOPILOT.SPEED_MAX) {
+            const scale = AUTOPILOT.SPEED_MAX / speed;
+            ship.vx *= scale;
+            ship.vy *= scale;
+          }
+        }
+        integrate(ship, dt);
+        resolveStationCollision(currentStation);
+      }
     updateGate(dt);
     const shipSpeed = Math.hypot(ship.vx, ship.vy);
     spawnTrailSparks(dt, shipSpeed);
-    const dxTravel = ship.x - lastShipX;
-    const dyTravel = ship.y - lastShipY;
-    distanceTraveled += Math.hypot(dxTravel, dyTravel);
-    lastShipX = ship.x;
-    lastShipY = ship.y;
+    const distFromOrigin = Math.hypot(ship.x - originX, ship.y - originY);
+    if (distFromOrigin > distanceTraveled) {
+      distanceTraveled = distFromOrigin;
+    }
     for (const activeSector of activeSectors) {
       for (let i = activeSector.asteroids.length - 1; i >= 0; i--) {
         const asteroid = activeSector.asteroids[i];
@@ -1895,7 +3284,8 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
         integrate(asteroid, dt);
       }
     }
-    updateFuelPickups(fuelPickups, activeStars, activeSectors, dt);
+    updateFuelPickups(fuelPickups, activeStars, activeSectors, dt, worldAgeMs);
+    updateResourcePickups(resourcePickups, activeStars, activeSectors, dt, worldAgeMs);
     enemiesInRange = updateEnemies(
       enemies,
       ship,
@@ -1910,7 +3300,10 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       ENEMY_BULLET_LIFE,
       sounds
     );
+    destroyObjectsInSafeZones(activeStations);
+    repelEnemiesFromStations(activeStations, dt);
     handleFuelPickups(fuelPickups, ship, SHIP_RADIUS, SCORE_POINTS, addScore, sounds);
+    handleResourcePickups(resourcePickups, ship, SHIP_RADIUS, addResource, sounds);
     handleBulletHits(
       bullets,
       enemies,
@@ -1920,6 +3313,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       addScore,
       sounds,
       fuelPickups,
+      resourcePickups,
       particles,
       worldAgeMs
     );
@@ -1958,25 +3352,27 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       trailFadeTimer = 0;
     }
 
-    for (const star of activeStars) {
-      const dx = ship.x - star.x;
-      const dy = ship.y - star.y;
-      const dist = Math.hypot(dx, dy);
-      if (dist < star.radius) {
-        handleLifeLoss("star");
-        return;
+    if (!shipInSafeZone) {
+      for (const star of activeStars) {
+        const dx = ship.x - star.x;
+        const dy = ship.y - star.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < star.radius) {
+          handleLifeLoss("star");
+          return;
+        }
       }
-    }
 
-    if (invulnTimer <= 0) {
-      for (const activeSector of activeSectors) {
-        for (const asteroid of activeSector.asteroids) {
-          const dx = ship.x - asteroid.x;
-          const dy = ship.y - asteroid.y;
-          const dist = Math.hypot(dx, dy);
-          if (dist < asteroid.radius + SHIP_RADIUS) {
-            handleLifeLoss("normal");
-            return;
+      if (invulnTimer <= 0) {
+        for (const activeSector of activeSectors) {
+          for (const asteroid of activeSector.asteroids) {
+            const dx = ship.x - asteroid.x;
+            const dy = ship.y - asteroid.y;
+            const dist = Math.hypot(dx, dy);
+            if (dist < asteroid.radius + SHIP_RADIUS) {
+              handleLifeLoss("normal");
+              return;
+            }
           }
         }
       }
@@ -1988,13 +3384,18 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       return;
     }
 
-    const wantsFire = !controlsDisabled
-      && (keys[" "] || (mouseAimEnabled && mouse.leftDown) || touch.fireId !== null);
+    const spaceFires = keys[" "] && !docked;
+    const manualFire = spaceFires || (mouseAimEnabled && mouse.leftDown) || touch.fireId !== null;
+    const wantsFire = !controlsDisabled && !docked
+      && (autopilotEngaged ? autopilotFire : manualFire);
     if (shipVisible && wantsFire && fireCooldown === 0 && fireLockout === 0) {
       spawnBullet(bullets, ship, BULLET);
       sounds.play("laser");
       triggerShake(SHAKE.FIRE, 0.12);
-      fireCooldown = BULLET.COOLDOWN;
+      fireCooldown = getFireCooldownSeconds(upgradeLevels.fireRateLevel);
+      if (autopilotEngaged) {
+        autopilotFirePause = randomRange(AUTOPILOT.FIRE.PAUSE_MIN, AUTOPILOT.FIRE.PAUSE_MAX);
+      }
     }
 
     if (!sector.goalCollected && sector.goal.containsPoint(ship.x, ship.y, SHIP_RADIUS)) {
@@ -2011,6 +3412,9 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       surveyed += 1;
       scoreMultiplier = 1 + surveyed;
       addScore(SCORE_POINTS.SURVEY, false, false, { x: ship.x, y: ship.y }, "survey");
+      if (intro.enabled) {
+        intro.firstSurveyComplete = true;
+      }
       queueAlert("Sector surveyed.");
       queueAlert("Fuel tanks refilled!", ALERT.DURATION);
       triggerShake(SHAKE.SURVEY);
@@ -2123,11 +3527,38 @@ function render() {
     width: maxViewWidth,
     height: maxViewHeight
   };
+  const introHighlight = intro.enabled && INTRO
+    ? {
+      goal: Math.min(1, intro.highlights.goal / INTRO.HIGHLIGHT_DURATION),
+      exit: Math.min(1, intro.highlights.exit / INTRO.HIGHLIGHT_DURATION),
+      score: Math.min(1, intro.highlights.score / INTRO.HIGHLIGHT_DURATION),
+      fuel: Math.min(1, intro.highlights.fuel / INTRO.HIGHLIGHT_DURATION),
+      vignette: Math.min(1, intro.highlights.vignette / INTRO.VIGNETTE_DURATION),
+      river: Math.min(1, intro.highlights.river / INTRO.RIVER_HIGHLIGHT_DURATION)
+    }
+    : {
+      goal: 0,
+      exit: 0,
+      score: 0,
+      fuel: 0,
+      vignette: 0,
+      river: 0
+    };
   const rivers = activeSectors.flatMap((activeSector) => activeSector.runtimeRivers ?? []);
   const renderStars = activeSectors.flatMap((activeSector) => activeSector.stars);
-  drawRivers(ctx, rivers, maxViewRect, worldAgeTicks, renderStars, worldAgeMs / 1000);
+  drawRivers(ctx, rivers, maxViewRect, worldAgeTicks, renderStars, worldAgeMs / 1000, introHighlight.river);
   const shipSpeed = Math.hypot(ship.vx, ship.vy);
   drawTrail(ctx, trail, shipSpeed);
+  drawCollectorField(ctx, getCollectorStats(upgradeLevels.collectorLevel).radius);
+  for (const activeSector of activeSectors) {
+    if (activeSector.station) {
+      const dx = ship.x - activeSector.station.x;
+      const dy = ship.y - activeSector.station.y;
+      const inZone = Math.hypot(dx, dy) <= (activeSector.station.safeRadius ?? STATION.SAFE_ZONE_RADIUS);
+      const isDockedHere = docked && dockStation?.id === activeSector.station.id;
+      drawStationSafeZone(ctx, activeSector.station, inZone, isDockedHere);
+    }
+  }
   drawSectorBounds(ctx, sector);
   drawScanPulse(ctx, ship, activeSectors, time, getViewRadius(canvas, camera));
   const viewRadius = getViewRadius(canvas, camera);
@@ -2154,12 +3585,16 @@ function render() {
     if (activeSector.beaconEntity) {
       activeSector.beaconEntity.draw(ctx);
     }
+    if (activeSector.stationEntity) {
+      activeSector.stationEntity.draw(ctx);
+    }
     for (const asteroid of activeSector.asteroids) {
       asteroid.draw(ctx);
     }
   }
   drawGate(ctx);
   drawFuelPickups(ctx, fuelPickups);
+  drawResourcePickups(ctx, resourcePickups);
   drawEnemies(ctx, enemies);
   drawEnemyBullets(ctx, enemyBullets);
   drawBullets(ctx, bullets);
@@ -2179,7 +3614,7 @@ function render() {
   if (DEBUG.VECTORS) {
     drawDebugVectors(ctx, ship);
   }
-  drawScreenEffects(ctx, canvas.width, canvas.height);
+  drawScreenEffects(ctx, canvas.width, canvas.height, introHighlight.vignette);
   if (controlsDisabledTimer > 0 && shipVisible) {
     drawControlDisableOverlay(ctx, canvas, camera, controlsDisabledTimer, CALIBRATION_SHIP_RADIUS);
   }
@@ -2194,21 +3629,32 @@ function render() {
     ? "CTRL: TOUCH + KEYS"
     : (mouseAimEnabled ? "CTRL: MOUSE + KEYS" : "CTRL: KEYS");
   const anomalyEffects = getAnomalyEffects(sector, time);
+  const distanceFromOrigin = Math.hypot(ship.x - originX, ship.y - originY);
   drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, enemiesInRange, hudW, hudH, anomalyEffects);
-  drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, hudW, hudH, isCompactHud, anomalyEffects);
-  drawFuelGauge(ctx, ship, hudW, hudH, isCompactHud);
+  drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, stationMarkers, hudW, hudH, isCompactHud, anomalyEffects, introHighlight);
+  drawFuelGauge(ctx, ship, hudW, hudH, isCompactHud, introHighlight.fuel);
   drawStatusHud(
     ctx,
     ship,
     lives,
     surveyed,
     timeSpent,
+    distanceFromOrigin,
+    resourceCurrency,
     hudW,
     hudH,
     controlLabel,
     isCompactHud
   );
-  drawScoreHud(ctx, score, scoreMultiplier, scorePulse, hudW, hudH, isCompactHud);
+  drawScoreHud(ctx, score, scoreMultiplier, scorePulse, hudW, hudH, isCompactHud, introHighlight.score);
+  const autoRect = drawAutopilotToggle(ctx, autopilotActive, hudW, hudH, isCompactHud);
+  autopilotButtonRect = {
+    x: autoRect.x * hudScale,
+    y: autoRect.y * hudScale,
+    width: autoRect.width * hudScale,
+    height: autoRect.height * hudScale
+  };
+  drawStationIndicators(ctx, ship, stationMarkers, hudW, hudH, camera);
   if (sector?.sectorType === SECTOR_TYPES.SIGNAL_ORIGIN) {
     drawBeaconSignalHud(ctx, beaconSignal.strength, hudW, hudH, isCompactHud);
   }
@@ -2482,6 +3928,8 @@ requestAnimationFrame(loop);
     }
     ship.stopThrustLoop();
     music.stop();
+    setAutopilotActive(false, true);
+    sounds.stopLoop("at_station");
     pendingGameOver = true;
     gameOverTimer = GAME_OVER_DELAY;
     const finalScore = Math.round(score);
@@ -2504,9 +3952,13 @@ requestAnimationFrame(loop);
     }
     cleanupMouseControls();
     if (gameState) {
-      saveGameState(gameState);
+      if (allowPersistence) {
+        saveGameState(gameState);
+      }
     }
-    saveSectorIndex(sectorIndex);
+    if (allowPersistence) {
+      saveSectorIndex(sectorIndex);
+    }
     if (onGameOver) {
       onGameOver(cachedGameOverStats);
     }
@@ -2523,11 +3975,16 @@ requestAnimationFrame(loop);
     ship.stopThrustLoop();
     ship.stopRotateLoop();
     music.stop();
+    sounds.stopLoop("at_station");
     cleanupMouseControls();
     if (gameState) {
-      saveGameState(gameState);
+      if (allowPersistence) {
+        saveGameState(gameState);
+      }
     }
-    saveSectorIndex(sectorIndex);
+    if (allowPersistence) {
+      saveSectorIndex(sectorIndex);
+    }
   }
 
   function updateZoom(dt) {
