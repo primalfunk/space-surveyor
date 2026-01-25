@@ -13,6 +13,17 @@ export function showUpgradeStationModal(root, state, onAction) {
   title.className = "upgrade-title";
   title.textContent = "Upgrade Station";
 
+  const closeButton = document.createElement("button");
+  closeButton.type = "button";
+  closeButton.className = "upgrade-close";
+  closeButton.textContent = "Close";
+  closeButton.setAttribute("aria-label", "Close upgrade menu");
+  closeButton.addEventListener("click", () => {
+    if (onAction) {
+      onAction("close");
+    }
+  });
+
   const currency = document.createElement("div");
   currency.className = "upgrade-currency";
 
@@ -65,6 +76,7 @@ export function showUpgradeStationModal(root, state, onAction) {
   list.appendChild(repairRow.row);
 
   panel.appendChild(title);
+  panel.appendChild(closeButton);
   panel.appendChild(currency);
   panel.appendChild(tierCap);
   panel.appendChild(list);

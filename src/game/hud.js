@@ -774,7 +774,7 @@ export function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH, is
   ctx.font = `${labelFont}px ${HUD_FONT}`;
   ctx.fillText("SCORE", labelX, labelY);
 
-  const scoreX = labelX;
+  const scoreX = labelX + 100;
   const scoreY = y + (isCompact ? 50 : 54);
   const highlightPulse = Math.max(0, Math.min(1, highlight));
   const pulseT = Math.min(1, pulse / 1.2);
@@ -1142,16 +1142,86 @@ export function drawAlerts(ctx, alerts, alertClock, screenW, screenH) {
 
   ctx.save();
   ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-  ctx.font = `18px ${HUD_FONT}`;
+  const fontSize = 36;
+  ctx.font = `${fontSize}px ${HUD_FONT}`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  const x = screenW * 0.25;
-  const y = screenH * 0.25;
+  const x = screenW * 0.5;
+  const y = screenH * 0.5 - 100;
+  const metrics = ctx.measureText(active.text);
+  const textWidth = metrics.width;
+  const textHeight = fontSize * 1.2;
+  const time = performance.now();
+  const pulse = 0.6 + 0.4 * Math.sin(time * 0.004);
+
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  const haloRadius = Math.max(textWidth, textHeight) * (0.7 + pulse * 0.2);
+  const halo = ctx.createRadialGradient(
+    x,
+    y - textHeight * 0.1,
+    textHeight * 0.2,
+    x,
+    y,
+    haloRadius
+  );
+  halo.addColorStop(0, "rgba(120, 200, 190, 0.45)");
+  halo.addColorStop(1, "rgba(0, 0, 0, 0)");
+  ctx.fillStyle = halo;
+  ctx.beginPath();
+  ctx.arc(x, y, haloRadius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
   ctx.lineWidth = 3;
   ctx.strokeStyle = HUD_COLORS.ALERT_STROKE;
   ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
   ctx.strokeText(active.text, x, y);
   ctx.fillText(active.text, x, y);
+
+  ctx.save();
+  ctx.globalAlpha *= 0.35;
+  ctx.globalCompositeOperation = "lighter";
+  ctx.fillStyle = HUD_COLORS.ACCENT_SOFT;
+  const jitter = Math.sin(time * 0.02 + elapsed * 6) * 1.5;
+  ctx.fillText(active.text, x + jitter, y);
+  ctx.restore();
+
+  ctx.save();
+  ctx.globalCompositeOperation = "source-atop";
+  ctx.globalAlpha *= 0.25 + pulse * 0.12;
+  const left = x - textWidth / 2 - 6;
+  const top = y - textHeight;
+  const width = textWidth + 12;
+  const scanGap = 6;
+  ctx.fillStyle = "rgba(255, 255, 255, 0.25)";
+  for (let iy = 0; iy <= textHeight; iy += scanGap) {
+    const scanJitter = Math.sin(time * 0.03 + iy * 0.6) * 6;
+    ctx.fillRect(left + scanJitter, top + iy, width, 2);
+  }
+  ctx.restore();
+
+  const flareDuration = 0.6;
+  if (elapsed < flareDuration) {
+    const flareT = Math.max(0, Math.min(1, elapsed / flareDuration));
+    const sweepStart = x - textWidth * 0.7;
+    const sweepEnd = x + textWidth * 0.7;
+    const sweepX = sweepStart + (sweepEnd - sweepStart) * flareT;
+    const flareW = textWidth * 0.45;
+    const flareH = textHeight * 0.6;
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+    ctx.beginPath();
+    ctx.rect(left, y - textHeight * 0.9, width, textHeight * 1.4);
+    ctx.clip();
+    const flare = ctx.createLinearGradient(sweepX - flareW / 2, y, sweepX + flareW / 2, y);
+    flare.addColorStop(0, "rgba(255, 255, 255, 0)");
+    flare.addColorStop(0.5, "rgba(255, 240, 200, 0.75)");
+    flare.addColorStop(1, "rgba(255, 255, 255, 0)");
+    ctx.fillStyle = flare;
+    ctx.fillRect(sweepX - flareW / 2, y - flareH / 2, flareW, flareH);
+    ctx.restore();
+  }
   ctx.restore();
 }
 

@@ -444,6 +444,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
   let autopilotFirePause = 0;
   let autopilotThrustCooldown = 0;
   let autopilotThrustBurst = 0;
+  let autopilotTurnBias = 1;
   let autopilotButtonRect = null;
   sounds.setKeyMuted("thrust", autopilotActive);
   sounds.setKeyMuted("thrust_rotate", autopilotActive);
@@ -821,6 +822,12 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       if (!action) {
         return;
       }
+      if (action === "close") {
+        docked = false;
+        dockStation = null;
+        closeUpgradeModal();
+        return;
+      }
       const state = buildUpgradeUiState(station);
       if (action === "fireRate" && state.costs.fireRate !== null) {
         if (spendResource(state.costs.fireRate)) {
@@ -916,6 +923,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       return;
     }
     autopilotActive = next;
+    autopilotTurnBias = 1;
     sounds.setKeyMuted("thrust", autopilotActive);
     sounds.setKeyMuted("thrust_rotate", autopilotActive);
     if (!next) {
@@ -1295,6 +1303,39 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     return best;
   }
 
+  function getPursuitTarget() {
+    if (!enemies || enemies.length === 0) {
+      return null;
+    }
+    const speed = Math.hypot(ship.vx, ship.vy);
+    const forward = speed > 8
+      ? { x: ship.vx / speed, y: ship.vy / speed }
+      : { x: Math.sin(ship.heading), y: -Math.cos(ship.heading) };
+    const back = { x: -forward.x, y: -forward.y };
+    const coneHalfRad = ((AUTOPILOT.FIRE.PRIORITY_REAR_ANGLE_DEG ?? 120) * Math.PI) / 180 / 2;
+    const minDot = Math.cos(coneHalfRad);
+    const maxRange = AUTOPILOT.FIRE.PRIORITY_RANGE ?? ENEMY_FIRE_RANGE;
+    let best = null;
+    for (const enemy of enemies) {
+      const dx = enemy.x - ship.x;
+      const dy = enemy.y - ship.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist <= 0 || dist > maxRange) {
+        continue;
+      }
+      const dirX = dx / dist;
+      const dirY = dy / dist;
+      const backDot = back.x * dirX + back.y * dirY;
+      if (backDot < minDot) {
+        continue;
+      }
+      if (!best || dist < best.dist) {
+        best = { enemy, x: enemy.x, y: enemy.y, dist };
+      }
+    }
+    return best;
+  }
+
   function closestPointOnSegment(px, py, ax, ay, bx, by) {
     const abx = bx - ax;
     const aby = by - ay;
@@ -1341,7 +1382,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     return best;
   }
 
-    function getAutopilotAvoidance(activeStations) {
+    function getAutopilotAvoidance(activeStations, activeStars) {
       const avoid = { x: 0, y: 0 };
       let closest = Infinity;
 
@@ -1369,6 +1410,17 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
           const limit = radius + AUTOPILOT.AVOID.BEACON_BUFFER;
           addRepulsion(activeSector.beacon.x, activeSector.beacon.y, limit, 1.2);
         }
+    }
+
+    if (Array.isArray(activeStars)) {
+      for (const star of activeStars) {
+        const gravityRadius = Number.isFinite(star.gravityRadius) ? star.gravityRadius : 0;
+        if (!Number.isFinite(gravityRadius) || gravityRadius <= 0) {
+          continue;
+        }
+        const limit = gravityRadius + AUTOPILOT.AVOID.STAR_BODY_BUFFER;
+        addRepulsion(star.x, star.y, limit, 1.3);
+      }
     }
 
     for (const station of activeStations) {
@@ -1418,7 +1470,8 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
 
       for (const star of activeStars) {
         const bodyRadius = star.radius ?? 0;
-        const limit = bodyRadius + AUTOPILOT.AVOID.STAR_BODY_BUFFER + AUTOPILOT.COURSE.CORRIDOR_RADIUS;
+        const gravityRadius = Number.isFinite(star.gravityRadius) ? star.gravityRadius : bodyRadius;
+        const limit = gravityRadius + AUTOPILOT.AVOID.STAR_BODY_BUFFER + AUTOPILOT.COURSE.CORRIDOR_RADIUS;
         if (!Number.isFinite(limit) || limit <= 0) {
           continue;
         }
@@ -1451,16 +1504,49 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       return { desiredDir: adjusted, closest };
     }
 
+    function getGravityEscape(activeStars) {
+      if (!Array.isArray(activeStars)) {
+        return null;
+      }
+      let closest = null;
+      for (const star of activeStars) {
+        const gravityRadius = Number.isFinite(star.gravityRadius) ? star.gravityRadius : 0;
+        if (!Number.isFinite(gravityRadius) || gravityRadius <= 0) {
+          continue;
+        }
+        const dx = ship.x - star.x;
+        const dy = ship.y - star.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist <= 0 || dist > gravityRadius) {
+          continue;
+        }
+        if (!closest || dist < closest.dist) {
+          closest = { dx, dy, dist };
+        }
+      }
+      if (!closest) {
+        return null;
+      }
+      const mag = closest.dist || 1;
+      return { x: closest.dx / mag, y: closest.dy / mag };
+    }
+
     function computeAutopilotInput(dt, activeStars, activeStations) {
       const fuelRatio = ship.maxFuel > 0 ? ship.fuel / ship.maxFuel : 0;
-      const avoidData = getAutopilotAvoidance(activeStations);
+      const avoidData = getAutopilotAvoidance(activeStations, activeStars);
+      const pursuitTarget = getPursuitTarget();
+      const priorityEnemy = pursuitTarget ? pursuitTarget.enemy : null;
       let desired = null;
       let targetDist = 0;
+      let escapeMode = false;
 
     const avoidMag = Math.hypot(avoidData.avoid.x, avoidData.avoid.y);
     if (avoidMag > 0.001) {
       desired = { x: avoidData.avoid.x, y: avoidData.avoid.y };
       targetDist = avoidMag;
+    } else if (pursuitTarget) {
+      desired = { x: pursuitTarget.x - ship.x, y: pursuitTarget.y - ship.y };
+      targetDist = pursuitTarget.dist;
     } else {
         const surveyTarget = getLockedSurveyTarget();
       const fuelTarget = getFuelTarget();
@@ -1502,6 +1588,13 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       }
     }
 
+      const escapeDir = getGravityEscape(activeStars);
+      if (escapeDir) {
+        desired = escapeDir;
+        targetDist = null;
+        escapeMode = true;
+      }
+
       const desiredMag = Math.hypot(desired.x, desired.y) || 1;
       let desiredDir = { x: desired.x / desiredMag, y: desired.y / desiredMag };
 
@@ -1519,18 +1612,20 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
           }
         }
       }
-      const courseAdjust = getCourseAvoidance(desiredDir, lookaheadDist, activeStars, asteroidThreats);
-      desiredDir = courseAdjust.desiredDir;
+      if (!escapeMode) {
+        const courseAdjust = getCourseAvoidance(desiredDir, lookaheadDist, activeStars, asteroidThreats);
+        desiredDir = courseAdjust.desiredDir;
 
-      const riverInfo = getClosestRiverInfo(ship, sector?.runtimeRivers ?? []);
-      if (riverInfo && riverInfo.dist < (riverInfo.width / 2)) {
-        const flowDot = desiredDir.x * riverInfo.tangentX + desiredDir.y * riverInfo.tangentY;
-        if (flowDot < AUTOPILOT.RIVER.ALIGN_DOT_MIN) {
-          const outX = ship.x - riverInfo.closestX;
-          const outY = ship.y - riverInfo.closestY;
-          const outMag = Math.hypot(outX, outY) || 1;
-          desiredDir = { x: outX / outMag, y: outY / outMag };
-          targetDist = outMag;
+        const riverInfo = getClosestRiverInfo(ship, sector?.runtimeRivers ?? []);
+        if (riverInfo && riverInfo.dist < (riverInfo.width / 2)) {
+          const flowDot = desiredDir.x * riverInfo.tangentX + desiredDir.y * riverInfo.tangentY;
+          if (flowDot < AUTOPILOT.RIVER.ALIGN_DOT_MIN) {
+            const outX = ship.x - riverInfo.closestX;
+            const outY = ship.y - riverInfo.closestY;
+            const outMag = Math.hypot(outX, outY) || 1;
+            desiredDir = { x: outX / outMag, y: outY / outMag };
+            targetDist = outMag;
+          }
         }
       }
 
@@ -1584,20 +1679,42 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
         y: desiredVel.y - ship.vy
       };
       const errorMag = Math.hypot(errorVel.x, errorVel.y);
-      const steeringDir = errorMag > 0.5
+      const errorDir = errorMag > 0
         ? { x: errorVel.x / errorMag, y: errorVel.y / errorMag }
         : desiredDir;
+      const errorBlend = clampValue(
+        errorMag / Math.max(1, desiredSpeed * AUTOPILOT.COURSE.ERROR_BLEND_RATIO),
+        0,
+        1
+      );
+      const steeringRaw = {
+        x: desiredDir.x * (1 - errorBlend) + errorDir.x * errorBlend,
+        y: desiredDir.y * (1 - errorBlend) + errorDir.y * errorBlend
+      };
+      const steeringMag = Math.hypot(steeringRaw.x, steeringRaw.y) || 1;
+      const steeringDir = { x: steeringRaw.x / steeringMag, y: steeringRaw.y / steeringMag };
 
       const desiredHeading = Math.atan2(steeringDir.x, -steeringDir.y);
-      const angleDiff = normalizeAngle(desiredHeading - ship.heading);
+      let angleDiff = normalizeAngle(desiredHeading - ship.heading);
+      const turnEpsilon = AUTOPILOT.COURSE.TURN_EPSILON ?? 0.04;
+      if (Math.abs(Math.abs(angleDiff) - Math.PI) < turnEpsilon) {
+        angleDiff = autopilotTurnBias * (Math.PI - turnEpsilon);
+      } else if (angleDiff !== 0) {
+        autopilotTurnBias = Math.sign(angleDiff);
+      }
       const rotationInput = clampValue(angleDiff / (Math.PI / 4), -1, 1);
       const angleDeg = Math.abs(angleDiff) * (180 / Math.PI);
       let thrustInput = 0;
       let thrustWanted = 0;
       if (angleDeg < AUTOPILOT.TARGET.THRUST_ANGLE_DEG) {
         const errorRatio = baseSpeed > 0 ? errorMag / baseSpeed : 0;
+        const errorDeadband = AUTOPILOT.THRUST.ERROR_RATIO_DEADBAND ?? 0;
         const align = Math.max(0, Math.cos(angleDiff));
-        thrustWanted = clampValue(errorRatio, 0, 1);
+        if (errorRatio >= errorDeadband) {
+          thrustWanted = clampValue(errorRatio, 0, 1);
+        } else {
+          thrustWanted = 0;
+        }
         thrustWanted *= Math.pow(align, AUTOPILOT.THRUST.ALIGN_POWER);
         if (Number.isFinite(targetDist) && targetDist > AUTOPILOT.TARGET.BRAKE_DISTANCE) {
           const minPower = AUTOPILOT.THRUST.MIN_POWER ?? 0;
@@ -1627,57 +1744,57 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       const forward = { x: Math.sin(ship.heading), y: -Math.cos(ship.heading) };
       const coneRad = (AUTOPILOT.FIRE.CONE_DEG * Math.PI) / 180;
       const maxRange = Math.min(ENEMY_FIRE_RANGE, BULLET.SPEED * BULLET.LIFE * AUTOPILOT.FIRE.RANGE_MULT);
+      const canFireAt = (dx, dy, dist) => {
+        if (dist > maxRange || dist <= 0) {
+          return false;
+        }
+        const dot = (forward.x * dx + forward.y * dy) / dist;
+        const angle = Math.acos(clampValue(dot, -1, 1));
+        return angle <= coneRad;
+      };
       let fire = false;
 
       if (autopilotFirePause <= 0 && hazardClear) {
-        for (const threat of asteroidThreats) {
-          const dx = threat.px - ship.x;
-          const dy = threat.py - ship.y;
+        if (priorityEnemy) {
+          const dx = priorityEnemy.x - ship.x;
+          const dy = priorityEnemy.y - ship.y;
           const dist = Math.hypot(dx, dy);
-          if (dist > maxRange || dist <= 0) {
-            continue;
-          }
-          const dot = (forward.x * dx + forward.y * dy) / dist;
-          const angle = Math.acos(clampValue(dot, -1, 1));
-          if (angle <= coneRad) {
-            fire = true;
-            break;
-          }
-        }
-        if (!fire) {
-          for (const enemy of enemies) {
-            const dx = enemy.x - ship.x;
-            const dy = enemy.y - ship.y;
+          fire = canFireAt(dx, dy, dist);
+        } else {
+          for (const threat of asteroidThreats) {
+            const dx = threat.px - ship.x;
+            const dy = threat.py - ship.y;
             const dist = Math.hypot(dx, dy);
-            if (dist > maxRange || dist <= 0) {
-              continue;
-            }
-            const dot = (forward.x * dx + forward.y * dy) / dist;
-            const angle = Math.acos(clampValue(dot, -1, 1));
-            if (angle <= coneRad) {
+            if (canFireAt(dx, dy, dist)) {
               fire = true;
               break;
             }
           }
-        }
-        if (!fire) {
-          for (const activeSector of activeSectors) {
-            for (const asteroid of activeSector.asteroids) {
-              const dx = asteroid.x - ship.x;
-              const dy = asteroid.y - ship.y;
+          if (!fire) {
+            for (const enemy of enemies) {
+              const dx = enemy.x - ship.x;
+              const dy = enemy.y - ship.y;
               const dist = Math.hypot(dx, dy);
-              if (dist > maxRange || dist <= 0) {
-                continue;
-              }
-              const dot = (forward.x * dx + forward.y * dy) / dist;
-              const angle = Math.acos(clampValue(dot, -1, 1));
-              if (angle <= coneRad) {
+              if (canFireAt(dx, dy, dist)) {
                 fire = true;
                 break;
               }
             }
-            if (fire) {
-              break;
+          }
+          if (!fire) {
+            for (const activeSector of activeSectors) {
+              for (const asteroid of activeSector.asteroids) {
+                const dx = asteroid.x - ship.x;
+                const dy = asteroid.y - ship.y;
+                const dist = Math.hypot(dx, dy);
+                if (canFireAt(dx, dy, dist)) {
+                  fire = true;
+                  break;
+                }
+              }
+              if (fire) {
+                break;
+              }
             }
           }
         }

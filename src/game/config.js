@@ -339,7 +339,9 @@ const INPUT = {
       LOOKAHEAD_DIST: 1200,
       LOOKAHEAD_TIME_MAX: 5,
       CORRIDOR_RADIUS: 40,
-      AVOID_ANGLE_DEG: 16
+      AVOID_ANGLE_DEG: 16,
+      ERROR_BLEND_RATIO: 0.2,
+      TURN_EPSILON: 0.04
     },
     COLORS: {
       ON_FILL: "rgba(120, 210, 190, 0.35)",
@@ -358,7 +360,9 @@ const INPUT = {
     RANGE_MULT: 0.9,
     PAUSE_MIN: 0.15,
     PAUSE_MAX: 0.35,
-    HAZARD_CLEAR_DIST: 220
+    HAZARD_CLEAR_DIST: 220,
+    PRIORITY_RANGE: 900,
+    PRIORITY_REAR_ANGLE_DEG: 120
   },
     FUEL: {
       HIGH: 0.6,
@@ -384,7 +388,8 @@ const INPUT = {
       BURST_MIN: 0.25,
       BURST_COOLDOWN: 0,
       ALIGN_POWER: 1.6,
-      MIN_POWER: 0.35
+      MIN_POWER: 0.35,
+      ERROR_RATIO_DEADBAND: 0.035
     },
     GRAVITY: {
       COMPENSATION: 0.7,
