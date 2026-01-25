@@ -11,6 +11,12 @@ Space Surveyor is a retro-inspired 2D space exploration and combat game. Pilot a
 - Fuel management, score multipliers, and high-score leaderboard.
 - Local persistence via `localStorage` (no backend required to play).
 
+## Recent Updates
+
+- Autopilot now resists gravity wells, prioritizes nearby pursuers, and avoids throttle chatter.
+- Upgrade Station menu includes a selectable Close button.
+- Alert HUD visuals now feature scanline interference, a pulsing halo, and a flare sweep.
+
 ## Gameplay Loop
 
 1) Explore a sector and locate the survey goal.
