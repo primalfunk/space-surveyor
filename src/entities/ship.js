@@ -15,10 +15,6 @@ const THRUST_LOOP_SEGMENT = SHIP.THRUST_LOOP_SEGMENT;
 const THRUST_LOOP_CROSSFADE = SHIP.THRUST_LOOP_CROSSFADE;
 const THRUST_VISUAL = SHIP.THRUST_VISUAL;
 
-const keys = {};
-window.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
-window.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
-
 export class Ship {
   constructor(x, y) {
     this.x = x;
@@ -60,12 +56,7 @@ export class Ship {
       return;
     }
     let rotationInput = 0;
-    if (keys["arrowleft"] || keys["a"]) rotationInput -= 1;
-    if (keys["arrowright"] || keys["d"]) rotationInput += 1;
-
     let thrustInput = 0;
-    if (keys["arrowup"] || keys["w"]) thrustInput = 1;
-    if (keys["arrowdown"] || keys["s"]) thrustInput = -1;
 
     let aimAngle = null;
     if (input) {

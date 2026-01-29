@@ -63,11 +63,21 @@
       pointer-events: auto;
     }
     .start-title {
-      font-size: 64px;
-      letter-spacing: 6px;
+      font-size: 62px;
+      letter-spacing: 5px;
       text-transform: uppercase;
-      text-shadow: 0 0 18px var(--ui-glow);
+      text-shadow: 0 0 22px rgba(120, 220, 210, 0.55);
       animation: title-breathe 4.5s ease-in-out infinite;
+      margin-top: 0;
+      margin-bottom: 6px;
+      padding: 14px 26px;
+      text-align: center;
+      background: rgba(6, 12, 16, 0.92);
+      border: 1px solid rgba(120, 200, 190, 0.45);
+      box-shadow: 0 0 24px rgba(120, 200, 190, 0.35);
+      position: relative;
+      z-index: 2;
+      width: min(720px, calc(100vw - 60px));
     }
     .start-subtitle {
       font-size: 21px;
@@ -84,29 +94,18 @@
       opacity: 0.75;
     }
     .start-blurb {
-      font-size: 21px;
+      font-size: 10px;
       letter-spacing: 1px;
       text-transform: none;
       opacity: 0.7;
       max-width: 520px;
       text-align: center;
       line-height: 1.4;
+      animation: title-breathe 4.5s ease-in-out infinite;
     }
     .start-subtitle-name {
       color: var(--ui-accent);
       animation: name-pulse 3.6s ease-in-out infinite;
-    }
-    .start-credit {
-      position: absolute;
-      right: 28px;
-      bottom: 22px;
-      font-size: 10px;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      color: var(--ui-muted);
-    }
-    .start-credit .start-subtitle-name {
-      color: var(--ui-accent);
     }
     .start-carousel {
       width: min(640px, 86vw);
@@ -324,6 +323,9 @@
         inset 0 0 18px rgba(80, 160, 160, 0.2);
       transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
     }
+    .start-button {
+      margin-top: 50px;
+    }
     .start-capsule:hover,
     .start-capsule:focus {
       transform: translateY(-1px) scale(1.02);
@@ -532,6 +534,44 @@
         border: 1px solid var(--ui-line-strong);
         color: var(--ui-text);
       }
+      .exit-button {
+        position: absolute;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        font-size: 14px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        background: rgba(8, 12, 16, 0.85);
+        border: 1px solid var(--ui-line-strong);
+        color: var(--ui-text);
+        box-shadow: 0 0 12px rgba(120, 200, 190, 0.35);
+        z-index: 6;
+        cursor: pointer;
+      }
+      .exit-button:hover,
+      .exit-button:focus {
+        box-shadow: 0 0 18px rgba(120, 200, 190, 0.6);
+        outline: none;
+      }
+      .terminate-button {
+        position: absolute;
+        font-size: 11px;
+        padding: 8px 12px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        background: rgba(12, 18, 22, 0.92);
+        border: 1px solid rgba(200, 110, 110, 0.8);
+        color: rgba(255, 230, 210, 0.95);
+        box-shadow: 0 0 12px rgba(200, 110, 110, 0.35);
+        z-index: 6;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        line-height: 1.2;
+      }
     .score-entry {
       width: 100%;
       padding: 12px 14px;
@@ -629,6 +669,57 @@
       font-size: 16px;
       opacity: 0.85;
       letter-spacing: 1px;
+    }
+    @media (max-width: 420px), (max-height: 700px) {
+      .start-panel {
+        gap: 30px;
+      }
+      .start-title {
+        font-size: 36px;
+        letter-spacing: 4px;
+        padding: 10px 18px;
+      }
+      .start-subtitle {
+        font-size: 14px;
+        min-height: 16px;
+      }
+      .start-carousel {
+        width: min(520px, 88vw);
+        min-height: 190px;
+        margin-bottom: 6px;
+      }
+      .start-card {
+        padding: 12px 14px 14px;
+      }
+      .start-controls-item {
+        grid-template-columns: 130px 1fr;
+        gap: 10px;
+      }
+      .start-controls-keys {
+        font-size: 10px;
+        letter-spacing: 1.5px;
+        padding: 4px 8px;
+      }
+      .start-controls-desc {
+        font-size: 11px;
+      }
+      .start-legend-name {
+        font-size: 12px;
+      }
+      .start-legend-desc {
+        font-size: 11px;
+      }
+      .start-scores-list {
+        font-size: 11px;
+      }
+      .start-capsule {
+        font-size: 14px;
+        padding: 10px 20px;
+      }
+      .start-blurb {
+        font-size: 16px;
+        max-width: 420px;
+      }
     }
   </style>
 </head>

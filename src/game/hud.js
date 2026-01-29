@@ -600,7 +600,8 @@ export function drawStationIndicators(ctx, ship, stations, screenW, screenH, cam
 
 export function drawFuelGauge(ctx, ship, screenW, screenH, isCompact, highlight = 0) {
   const edge = isCompact ? 12 : 20;
-  const panelW = Math.min(isCompact ? 260 : 320, screenW - edge * 2);
+  const basePanelW = Math.min(isCompact ? 260 : 320, screenW - edge * 2);
+  const panelW = basePanelW * 0.8;
   const panelH = isCompact ? 70 : 78;
   const x = edge;
   const y = screenH - panelH - (isCompact ? 10 : 16);
@@ -642,10 +643,13 @@ export function drawFuelGauge(ctx, ship, screenW, screenH, isCompact, highlight 
   ctx.fillStyle = depleted ? "rgba(200, 110, 110, 0.9)" : grad;
   ctx.fillRect(barX, barY, fillWidth, barH);
 
-  ctx.fillStyle = HUD_COLORS.PANEL_MUTED;
+  ctx.fillStyle = "rgba(245, 250, 250, 0.98)";
+  ctx.shadowColor = HUD_COLORS.ACCENT_GLOW;
+  ctx.shadowBlur = isCompact ? 6 : 8;
   ctx.font = `${isCompact ? 11 : 12}px ${HUD_FONT}`;
   ctx.textAlign = "left";
   ctx.fillText("FUEL", barX + 20, y + 18);
+  ctx.shadowBlur = 0;
   ctx.textAlign = "right";
   ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
   ctx.fillText(fuelValue, x + panelW - 12, y + 18);
@@ -654,7 +658,7 @@ export function drawFuelGauge(ctx, ship, screenW, screenH, isCompact, highlight 
     ctx.fillStyle = HUD_COLORS.WARNING;
     ctx.font = `${isCompact ? 10 : 11}px ${HUD_FONT}`;
     ctx.textAlign = "right";
-    ctx.fillText("Press Q to restart", x + panelW - 12, y + panelH - 8);
+    ctx.fillText("Tap to terminate", x + panelW - 12, y + panelH - 8);
   }
   ctx.restore();
 }
@@ -675,15 +679,17 @@ export function drawStatusHud(ctx, ship, lives, surveyed, timeSpent, distanceFro
   const showControls = !isCompact && controlLabel;
   const lineH = isCompact ? STATUS.ROW_HEIGHT_COMPACT : STATUS.ROW_HEIGHT;
   const basePad = isCompact ? 12 : 16;
-  const panelW = Math.min(
+  const basePanelW = Math.min(
     isCompact ? STATUS.PANEL_WIDTH_COMPACT : STATUS.PANEL_WIDTH,
     screenW - edge * 2
   );
+  const panelW = basePanelW * 0.6;
   const panelH = basePad * 2 + lineH * lines.length + (showControls ? lineH : 0);
   const x = edge;
   const y = edge;
   const iconSize = isCompact ? STATUS.ICON_SIZE_COMPACT : STATUS.ICON_SIZE;
-  const valueFont = isCompact ? STATUS.VALUE_FONT_COMPACT : STATUS.VALUE_FONT;
+  const valueFontBase = isCompact ? STATUS.VALUE_FONT_COMPACT : STATUS.VALUE_FONT;
+  const valueFont = valueFontBase + (isCompact ? 1 : 2);
 
   ctx.save();
   drawHudFrame(ctx, x, y, panelW, panelH, { notch: isCompact ? 12 : 16, glowBlur: 12 });
@@ -696,10 +702,10 @@ export function drawStatusHud(ctx, ship, lives, surveyed, timeSpent, distanceFro
     drawStatIcon(ctx, line.icon, iconX, cursorY, iconSize, HUD_COLORS.ACCENT, HUD_COLORS.ACCENT_GLOW);
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
-    ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
+    ctx.fillStyle = "rgba(245, 250, 250, 0.98)";
     ctx.font = `bold ${valueFont}px ${HUD_FONT}`;
     ctx.shadowColor = HUD_COLORS.ACCENT_GLOW;
-    ctx.shadowBlur = STATUS.VALUE_GLOW;
+    ctx.shadowBlur = STATUS.VALUE_GLOW + (isCompact ? 4 : 6);
     ctx.fillText(line.value, valueX, cursorY);
     ctx.shadowBlur = 0;
     cursorY += lineH;
@@ -750,12 +756,32 @@ export function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH, is
   const displayScore = Math.max(0, Math.floor(score));
   const scoreText = displayScore.toString().padStart(7, "0");
   const edge = isCompact ? 12 : 18;
-  const offsetX = isCompact ? 10 : 24;
-  const panelW = Math.min(isCompact ? 260 : 320, screenW - edge * 2);
+  const basePanelW = Math.min(isCompact ? 260 : 320, screenW - edge * 2);
+  const panelW = basePanelW * 0.6 + 50;
   const panelH = isCompact ? 70 : 78;
-  const x = screenW - panelW - edge + offsetX;
+  const autopilotRect = getAutopilotButtonRect(screenW, screenH, isCompact);
+  const fuelBasePanelW = Math.min(isCompact ? 260 : 320, screenW - edge * 2);
+  const fuelPanelW = fuelBasePanelW * 0.8;
+  const minGap = isCompact ? 8 : 12;
+  let gapLeft = autopilotRect
+    ? autopilotRect.x - (edge + fuelPanelW)
+    : minGap;
+  if (!Number.isFinite(gapLeft)) {
+    gapLeft = minGap;
+  }
+  gapLeft = Math.max(minGap, gapLeft);
+  const maxRight = screenW - edge;
+  let x = autopilotRect
+    ? autopilotRect.x + autopilotRect.width + gapLeft
+    : screenW - panelW - edge;
+  if (x + panelW > maxRight) {
+    x = Math.max(
+      autopilotRect ? autopilotRect.x + autopilotRect.width + minGap : edge,
+      maxRight - panelW
+    );
+  }
   const y = screenH - panelH - (isCompact ? 10 : 16);
-  const labelX = x + 24;
+  const labelX = x + (isCompact ? 18 : 22);
   const labelY = y + (isCompact ? 16 : 18);
   const scoreFont = isCompact ? 24 : 28;
   const labelFont = isCompact ? 11 : 12;
@@ -770,11 +796,24 @@ export function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH, is
   drawHudTick(ctx, x, y + 8, panelW);
 
   ctx.textAlign = "left";
-  ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
+  ctx.fillStyle = "rgba(245, 250, 250, 0.98)";
+  ctx.shadowColor = HUD_COLORS.ACCENT_GLOW;
+  ctx.shadowBlur = isCompact ? 6 : 8;
   ctx.font = `${labelFont}px ${HUD_FONT}`;
   ctx.fillText("SCORE", labelX, labelY);
+  ctx.shadowBlur = 0;
 
-  const scoreX = labelX + 100;
+  ctx.font = `bold ${scoreFont}px ${HUD_FONT}`;
+  const scoreMetrics = ctx.measureText(scoreText);
+  const platePadX = isCompact ? 18 : 22;
+  const platePadY = isCompact ? 8 : 10;
+  const plateW = scoreMetrics.width + platePadX * 2;
+  const plateH = scoreFont + platePadY * 2;
+  const minScoreX = x + 16 + platePadX;
+  const maxScoreX = x + panelW - 16 - plateW + platePadX;
+  ctx.textAlign = "left";
+  let scoreX = labelX + platePadX;
+  scoreX = Math.max(minScoreX, Math.min(maxScoreX, scoreX));
   const scoreY = y + (isCompact ? 50 : 54);
   const highlightPulse = Math.max(0, Math.min(1, highlight));
   const pulseT = Math.min(1, pulse / 1.2);
@@ -805,12 +844,6 @@ export function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH, is
     ctx.fillRect(bar2X, bar2Y, bar2W, bar2H);
   }
 
-  ctx.font = `bold ${scoreFont}px ${HUD_FONT}`;
-  const scoreMetrics = ctx.measureText(scoreText);
-  const platePadX = isCompact ? 18 : 22;
-  const platePadY = isCompact ? 8 : 10;
-  const plateW = scoreMetrics.width + platePadX * 2;
-  const plateH = scoreFont + platePadY * 2;
   const plateX = scoreX - platePadX;
   const plateY = scoreY - scoreFont - platePadY + 4;
   const plateGrad = ctx.createLinearGradient(plateX, plateY, plateX + plateW, plateY + plateH);
@@ -848,7 +881,8 @@ export function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH, is
 
   const badgeScale = 1 + highlightPulse * 0.18;
   const badgeR = (isCompact ? 13 : 15) * badgeScale;
-  const badgeX = x + panelW - (isCompact ? 34 : 38);
+  let badgeX = x + panelW - (isCompact ? 34 : 38);
+  badgeX = Math.min(badgeX, x + panelW - badgeR - 10);
   const badgeY = y + panelH / 2 + 6;
   const badgeGrad = ctx.createRadialGradient(
     badgeX - 4,
@@ -885,9 +919,12 @@ export function drawScoreHud(ctx, score, multiplier, pulse, screenW, screenH, is
   ctx.fillStyle = "rgba(8, 12, 16, 0.9)";
   ctx.font = `${badgeFont}px ${HUD_FONT}`;
   ctx.fillText(`x${multiplier}`, badgeX, badgeY + 6);
-  ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
+  ctx.fillStyle = "rgba(245, 250, 250, 0.98)";
+  ctx.shadowColor = HUD_COLORS.ACCENT_GLOW;
+  ctx.shadowBlur = isCompact ? 6 : 8;
   ctx.font = `${badgeLabelFont}px ${HUD_FONT}`;
   ctx.fillText("MULTI", badgeX, labelY);
+  ctx.shadowBlur = 0;
 
   ctx.restore();
 }
@@ -1142,12 +1179,12 @@ export function drawAlerts(ctx, alerts, alertClock, screenW, screenH) {
 
   ctx.save();
   ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-  const fontSize = 36;
+  const fontSize = 18;
   ctx.font = `${fontSize}px ${HUD_FONT}`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   const x = screenW * 0.5;
-  const y = screenH * 0.5 - 100;
+  const y = screenH * 0.5;
   const metrics = ctx.measureText(active.text);
   const textWidth = metrics.width;
   const textHeight = fontSize * 1.2;
@@ -1173,7 +1210,7 @@ export function drawAlerts(ctx, alerts, alertClock, screenW, screenH) {
   ctx.fill();
   ctx.restore();
 
-  ctx.lineWidth = 3;
+  ctx.lineWidth = 2;
   ctx.strokeStyle = HUD_COLORS.ALERT_STROKE;
   ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
   ctx.strokeText(active.text, x, y);

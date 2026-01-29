@@ -10,6 +10,7 @@ class SoundManager {
     this.pool = new Map();
     this.loopHandles = new Map();
     this.preloaded = false;
+    this.unlocked = false;
     this.muted = false;
     this.mutedKeys = new Set();
   }
@@ -25,6 +26,40 @@ class SoundManager {
       this.pool.set(key, [audio]);
     }
     this.preloaded = true;
+  }
+
+  unlock() {
+    if (this.unlocked) {
+      return;
+    }
+    this.preload();
+    this.unlocked = true;
+    const warm = (audio) => {
+      audio.muted = true;
+      audio.currentTime = 0;
+      try {
+        audio.load();
+      } catch (err) {}
+      const playResult = audio.play();
+      if (playResult && typeof playResult.then === "function") {
+        playResult.then(() => {
+          audio.pause();
+          audio.currentTime = 0;
+          audio.muted = false;
+        }).catch(() => {
+          audio.muted = false;
+        });
+      } else {
+        audio.pause();
+        audio.currentTime = 0;
+        audio.muted = false;
+      }
+    };
+    for (const pool of this.pool.values()) {
+      for (const audio of pool) {
+        warm(audio);
+      }
+    }
   }
 
   play(key) {
@@ -48,7 +83,10 @@ class SoundManager {
     }
     audio.volume = clampVolume(def.volume ?? 1);
     audio.currentTime = 0;
-    audio.play().catch(() => {});
+    const playResult = audio.play();
+    if (playResult && typeof playResult.then === "function") {
+      playResult.catch(() => {});
+    }
   }
 
   startLoop(key, segmentSeconds = 0.4, crossfadeSeconds = 0.16) {
@@ -63,6 +101,37 @@ class SoundManager {
       return;
     }
     const volume = clampVolume(def.volume ?? 1);
+    if (def.loopMode === "native") {
+      let pool = this.pool.get(key);
+      if (!pool) {
+        pool = [];
+        this.pool.set(key, pool);
+      }
+      let audio = pool[0];
+      if (!audio) {
+        audio = new Audio(def.src);
+        audio.preload = "auto";
+        pool.push(audio);
+      }
+      audio.loop = true;
+      audio.volume = clampVolume(volume);
+      audio.currentTime = 0;
+      this.loopHandles.set(key, {
+        audio,
+        stop: () => {
+          audio.loop = false;
+          audio.pause();
+          audio.currentTime = 0;
+        }
+      });
+      const playResult = audio.play();
+      if (playResult && typeof playResult.then === "function") {
+        playResult.catch(() => {
+          this.stopLoop(key);
+        });
+      }
+      return;
+    }
     const fadeMs = Math.max(20, crossfadeSeconds * 1000);
     const segmentMs = Math.max(100, segmentSeconds * 1000);
     const intervalMs = Math.max(40, segmentMs - fadeMs);
@@ -103,7 +172,14 @@ class SoundManager {
     const startAudio = (audio, fadeIn) => {
       audio.currentTime = 0;
       audio.volume = fadeIn ? 0 : clampVolume(volume);
-      audio.play().catch(() => {});
+      const playResult = audio.play();
+      if (playResult && typeof playResult.then === "function") {
+        playResult.catch(() => {
+          if (!stopped) {
+            this.stopLoop(key);
+          }
+        });
+      }
       if (fadeIn) {
         fade(audio, 0, volume);
       }
@@ -202,6 +278,7 @@ class MusicManager {
     this.audio.volume = volume;
     this.index = 0;
     this.playing = false;
+    this.unlocked = false;
     this.onEnded = this.onEnded.bind(this);
   }
 
@@ -219,7 +296,47 @@ class MusicManager {
     }
     this.audio.src = this.tracks[this.index];
     this.audio.currentTime = 0;
-    this.audio.play().catch(() => {});
+    const playResult = this.audio.play();
+    if (playResult && typeof playResult.then === "function") {
+      playResult.catch(() => {
+        if (this.playing) {
+          this.playing = false;
+          this.audio.removeEventListener("ended", this.onEnded);
+        }
+      });
+    }
+  }
+
+  unlock() {
+    if (this.unlocked) {
+      return;
+    }
+    if (!this.tracks.length) {
+      return;
+    }
+    this.unlocked = true;
+    if (!this.audio.src) {
+      this.audio.src = this.tracks[this.index];
+    }
+    this.audio.muted = true;
+    this.audio.currentTime = 0;
+    try {
+      this.audio.load();
+    } catch (err) {}
+    const playResult = this.audio.play();
+    if (playResult && typeof playResult.then === "function") {
+      playResult.then(() => {
+        this.audio.pause();
+        this.audio.currentTime = 0;
+        this.audio.muted = false;
+      }).catch(() => {
+        this.audio.muted = false;
+      });
+    } else {
+      this.audio.pause();
+      this.audio.currentTime = 0;
+      this.audio.muted = false;
+    }
   }
 
   start() {

@@ -3,52 +3,54 @@ const path = require("path");
 
 const ROOT = path.resolve(__dirname, "..");
 const DIST_DIR = path.join(ROOT, "dist");
-const SOURCES = [
-  "src/game/audio.js",
-  "src/game/physics.js",
-  "src/entities/asteroid.js",
-  "src/entities/enemyShip.js",
-  "src/entities/goal.js",
-  "src/entities/endZone.js",
-  "src/entities/star.js",
-  "src/entities/ship.js",
-  "src/game/camera.js",
-  "src/game/sectorManager.js",
-  "src/ui/startScreen.js",
-  "src/ui/gameoverModal.js",
-  "src/ui/levelCompleteModal.js",
-  "src/game/gameLoop.js",
-  "src/main.js"
-];
+const ENTRY = "src/main.js";
 
 function stripImports(source) {
-  return source.replace(/^\s*import .*;\s*$/gm, "");
+  // Strip single-line and multi-line ES module import statements.
+  return source.replace(/^\s*import[\s\S]*?;\s*$/gm, "");
 }
 
 function transformExports(source, exported) {
   let output = source;
+  const addExport = (exportName, localName = exportName) => {
+    exported.set(exportName, localName);
+  };
+
   output = output.replace(/export\s+(class|function)\s+([A-Za-z0-9_]+)/g, (match, type, name) => {
-    exported.add(name);
+    addExport(name);
     return `${type} ${name}`;
   });
   output = output.replace(/export\s+(const|let|var)\s+([A-Za-z0-9_]+)/g, (match, type, name) => {
-    exported.add(name);
+    addExport(name);
     return `${type} ${name}`;
   });
-  output = output.replace(/export\s*\{[^}]+\};?\s*/g, "");
+  output = output.replace(/export\s*\{([^}]+)\}\s*;?/g, (match, names) => {
+    const parts = names.split(",").map((part) => part.trim()).filter(Boolean);
+    for (const part of parts) {
+      const [localName, exportName] = part.split(/\s+as\s+/).map((segment) => segment.trim());
+      addExport(exportName || localName, localName);
+    }
+    return "";
+  });
   return output;
 }
 
 function buildGameBundle() {
+  const graph = new Map();
+  collectModule(path.join(ROOT, ENTRY), graph);
+  const ordered = topoSort(path.join(ROOT, ENTRY), graph);
+
   const chunks = [];
-  for (const source of SOURCES) {
-    const filePath = path.join(ROOT, source);
-    const exported = new Set();
+  for (const filePath of ordered) {
+    const source = path.relative(ROOT, filePath).replace(/\\/g, "/");
+    const exported = new Map();
     let contents = fs.readFileSync(filePath, "utf8").replace(/\r\n/g, "\n");
     contents = stripImports(contents);
     contents = transformExports(contents, exported);
 
-    const exportLines = Array.from(exported).map((name) => `window.${name} = ${name};`);
+    const exportLines = Array.from(exported.entries()).map(
+      ([exportName, localName]) => `window.${exportName} = ${localName};`
+    );
     const block = [
       `// ===== FILE: ${source} =====`,
       "(function(){",
@@ -62,6 +64,59 @@ function buildGameBundle() {
   }
 
   return chunks.join("\n");
+}
+
+function collectModule(filePath, graph) {
+  if (graph.has(filePath)) {
+    return;
+  }
+  const source = fs.readFileSync(filePath, "utf8").replace(/\r\n/g, "\n");
+  const imports = Array.from(source.matchAll(/import\s+(?:[\s\S]*?\s+from\s+)?["']([^"']+)["']\s*;/g))
+    .map((match) => match[1])
+    .filter((spec) => spec.startsWith("."))
+    .map((spec) => resolveImport(filePath, spec));
+
+  graph.set(filePath, imports);
+  for (const dep of imports) {
+    collectModule(dep, graph);
+  }
+}
+
+function resolveImport(fromPath, spec) {
+  const basePath = path.resolve(path.dirname(fromPath), spec);
+  if (fs.existsSync(basePath)) {
+    return basePath;
+  }
+  if (fs.existsSync(`${basePath}.js`)) {
+    return `${basePath}.js`;
+  }
+  throw new Error(`Missing import "${spec}" from ${fromPath}`);
+}
+
+function topoSort(entryPath, graph) {
+  const visiting = new Set();
+  const visited = new Set();
+  const order = [];
+
+  const visit = (node) => {
+    if (visited.has(node)) {
+      return;
+    }
+    if (visiting.has(node)) {
+      throw new Error(`Circular dependency detected at ${node}`);
+    }
+    visiting.add(node);
+    const deps = graph.get(node) || [];
+    for (const dep of deps) {
+      visit(dep);
+    }
+    visiting.delete(node);
+    visited.add(node);
+    order.push(node);
+  };
+
+  visit(entryPath);
+  return order;
 }
 
 function buildIndexHtml() {

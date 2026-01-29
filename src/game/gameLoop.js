@@ -80,7 +80,6 @@ const {
   BULLET,
   ENEMY,
   SHIP,
-  STORAGE,
   SECTOR,
   RIVER,
   AUTOPILOT,
@@ -116,14 +115,6 @@ const ENEMY_RANGE_SCALE = ENEMY.RANGE_SCALE;
 const ENEMY_EFFECTIVE_RANGE = PLAYER_EFFECTIVE_RANGE * ENEMY_RANGE_SCALE;
 const ENEMY_FIRE_RANGE = ENEMY_EFFECTIVE_RANGE * 1.1;
 const ENEMY_BULLET_LIFE = BULLET.LIFE * ENEMY_RANGE_SCALE;
-const keys = {};
-window.addEventListener("keydown", (e) => {
-  const key = e.key.toLowerCase();
-  keys[key] = true;
-});
-window.addEventListener("keyup", (e) => {
-  keys[e.key.toLowerCase()] = false;
-});
 
 function getViewRadius(canvas, camera) {
   return (Math.hypot(canvas.width, canvas.height) / 2) / camera.zoom;
@@ -142,7 +133,8 @@ function randomRange(min, max) {
 
 function getHudScale(screenW, screenH) {
   const base = Math.min(screenW, screenH);
-  return Math.min(1, Math.max(0.75, base / 900));
+  const minScale = base < 420 ? 0.65 : 0.75;
+  return Math.min(1, Math.max(minScale, base / 900));
 }
 
 function pickPsycheColor() {
@@ -263,6 +255,7 @@ function drawStarfield(ctx, starfield, offsetX, offsetY, width, height) {
 export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOver, options = {}) {
   const demoMode = Boolean(options?.demoMode);
   const autopilotDefault = Boolean(options?.autopilotDefault);
+  const onExitToMenu = typeof options?.onExitToMenu === "function" ? options.onExitToMenu : null;
   if (demoMode) {
     gameState = createDefaultGameState(AUTOPILOT.DEMO_SEED);
     sectorIndex = {};
@@ -437,10 +430,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
   let stationEntryLockId = null;
   let upgradeModal = null;
   let interactPressed = false;
-  let lastInteractHeld = false;
-  let lastEscapeHeld = false;
   let autopilotActive = autopilotDefault;
-  let lastAutopilotKey = false;
   let autopilotFirePause = 0;
   let autopilotThrustCooldown = 0;
   let autopilotThrustBurst = 0;
@@ -470,9 +460,10 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     moveY: 0,
     isActive: false
   };
-  const hasTouchInput = ("ontouchstart" in window) || (navigator.maxTouchPoints ?? 0) > 0;
   let interactButton = null;
-  const mouseAimStorageKey = STORAGE.MOUSE_AIM_KEY;
+  let exitButton = null;
+  let terminateButton = null;
+  let terminateRequested = false;
   let mouseAimEnabled = true;
   let wheelZoomStep = 0;
   const pinch = {
@@ -480,13 +471,6 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     startDist: 0,
     startZoom: 1
   };
-
-  try {
-    const stored = localStorage.getItem(mouseAimStorageKey);
-    if (stored !== null) {
-      mouseAimEnabled = stored === "true";
-    }
-  } catch (err) {}
 
   const updateMousePosition = (event) => {
     const rect = canvas.getBoundingClientRect();
@@ -647,16 +631,6 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     }
     endPinch(event.touches);
   };
-  const onToggleMouseAim = (event) => {
-    if (event.key.toLowerCase() !== "m") {
-      return;
-    }
-    mouseAimEnabled = !mouseAimEnabled;
-    try {
-      localStorage.setItem(mouseAimStorageKey, mouseAimEnabled.toString());
-    } catch (err) {}
-  };
-
   window.addEventListener("mousemove", onMouseMove);
   window.addEventListener("mousedown", onMouseDown);
   window.addEventListener("mouseup", onMouseUp);
@@ -664,11 +638,10 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
   canvas.addEventListener("touchmove", onTouchMove, { passive: false });
   canvas.addEventListener("touchend", onTouchEnd, { passive: false });
   canvas.addEventListener("touchcancel", onTouchEnd, { passive: false });
-  window.addEventListener("keydown", onToggleMouseAim);
   canvas.addEventListener("contextmenu", onContextMenu);
   canvas.addEventListener("wheel", onWheel, { passive: false });
 
-  if (uiRoot && hasTouchInput) {
+  if (uiRoot) {
     interactButton = document.createElement("button");
     interactButton.type = "button";
     interactButton.className = "interact-button";
@@ -679,6 +652,27 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       interactPressed = true;
     });
     uiRoot.appendChild(interactButton);
+
+    exitButton = document.createElement("button");
+    exitButton.type = "button";
+    exitButton.className = "exit-button";
+    exitButton.textContent = "X";
+    exitButton.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      requestExitToMenu();
+    });
+    uiRoot.appendChild(exitButton);
+
+    terminateButton = document.createElement("button");
+    terminateButton.type = "button";
+    terminateButton.className = "terminate-button";
+    terminateButton.textContent = "OUT OF FUEL - PRESS TO TERMINATE FLIGHT";
+    terminateButton.style.display = "none";
+    terminateButton.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      terminateRequested = true;
+    });
+    uiRoot.appendChild(terminateButton);
   }
 
   function cleanupMouseControls() {
@@ -689,12 +683,19 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     canvas.removeEventListener("touchmove", onTouchMove);
     canvas.removeEventListener("touchend", onTouchEnd);
     canvas.removeEventListener("touchcancel", onTouchEnd);
-    window.removeEventListener("keydown", onToggleMouseAim);
     canvas.removeEventListener("contextmenu", onContextMenu);
     canvas.removeEventListener("wheel", onWheel);
     if (interactButton) {
       interactButton.remove();
       interactButton = null;
+    }
+    if (exitButton) {
+      exitButton.remove();
+      exitButton = null;
+    }
+    if (terminateButton) {
+      terminateButton.remove();
+      terminateButton = null;
     }
     closeUpgradeModal();
   }
@@ -3029,11 +3030,6 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     } else if (autopilotThrustCooldown > 0) {
       autopilotThrustCooldown = Math.max(0, autopilotThrustCooldown - dt);
     }
-    const toggleKeyHeld = keys["p"];
-    if (!docked && toggleKeyHeld && !lastAutopilotKey) {
-      setAutopilotActive(!autopilotActive, true);
-    }
-    lastAutopilotKey = Boolean(toggleKeyHeld);
     const autopilotEngaged = autopilotActive && !inputBlocked && !docked;
     let externalInput = null;
     let autopilotFire = false;
@@ -3042,10 +3038,6 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     let shipInSafeZone = false;
     let shipFullyInsideSafeZone = false;
     if (!inputBlocked && !autopilotEngaged) {
-      if (keys["arrowleft"] || keys["a"]) keyboardRotationInput -= 1;
-      if (keys["arrowright"] || keys["d"]) keyboardRotationInput += 1;
-      if (keys["arrowup"] || keys["w"]) keyboardThrustInput = 1;
-      if (keys["arrowdown"] || keys["s"]) keyboardThrustInput = -1;
       if (mouseAimEnabled && mouse.hasMoved) {
         const centerX = canvas.width / 2 + camera.shakeX;
         const centerY = canvas.height / 2 + camera.shakeY;
@@ -3148,12 +3140,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     if (!shipInSafeZone) {
       stationEntryLockId = null;
     }
-    const interactHeld = keys["e"] || (docked && keys[" "]);
-    const escapeHeld = keys["escape"];
-    const interactTriggered = Boolean(interactPressed || (interactHeld && !lastInteractHeld));
-    const escapeTriggered = Boolean(escapeHeld && !lastEscapeHeld);
-    lastInteractHeld = interactHeld;
-    lastEscapeHeld = escapeHeld;
+    const interactTriggered = Boolean(interactPressed);
     interactPressed = false;
 
     if (!docked && currentStation && shipFullyInsideSafeZone && stationEntryLockId !== currentStation.id) {
@@ -3180,7 +3167,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
         docked = false;
         dockStation = null;
         closeUpgradeModal();
-      } else if (interactTriggered || escapeTriggered) {
+      } else if (interactTriggered) {
         docked = false;
         dockStation = null;
         closeUpgradeModal();
@@ -3495,14 +3482,14 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       }
     }
 
-    if (ship.fuel <= 0 && keys["q"]) {
-      keys["q"] = false;
+    if (ship.fuel <= 0 && terminateRequested) {
+      terminateRequested = false;
       handleLifeLoss("normal");
       return;
     }
+    terminateRequested = false;
 
-    const spaceFires = keys[" "] && !docked;
-    const manualFire = spaceFires || (mouseAimEnabled && mouse.leftDown) || touch.fireId !== null;
+    const manualFire = (mouseAimEnabled && mouse.leftDown) || touch.fireId !== null;
     const wantsFire = !controlsDisabled && !docked
       && (autopilotEngaged ? autopilotFire : manualFire);
     if (shipVisible && wantsFire && fireCooldown === 0 && fireLockout === 0) {
@@ -3743,13 +3730,43 @@ function render() {
   const hudH = canvas.height / hudScale;
   const isCompactHud = Math.min(canvas.width, canvas.height) < 820;
   const controlLabel = touch.isActive
-    ? "CTRL: TOUCH + KEYS"
-    : (mouseAimEnabled ? "CTRL: MOUSE + KEYS" : "CTRL: KEYS");
+    ? "INPUT: TOUCH"
+    : "INPUT: MOUSE";
   const anomalyEffects = getAnomalyEffects(sector, time);
   const distanceFromOrigin = Math.hypot(ship.x - originX, ship.y - originY);
   drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, enemiesInRange, hudW, hudH, anomalyEffects);
   drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, stationMarkers, hudW, hudH, isCompactHud, anomalyEffects, introHighlight);
   drawFuelGauge(ctx, ship, hudW, hudH, isCompactHud, introHighlight.fuel);
+  if (exitButton) {
+    const base = Math.min(hudW, hudH);
+    const edge = isCompactHud ? 12 : 20;
+    const maxSize = Math.min(hudW - edge * 2, hudH - edge * 2);
+    const desiredSize = isCompactHud
+      ? Math.min(MINIMAP.SIZE, Math.round(base * 0.28))
+      : MINIMAP.SIZE;
+    const size = Math.max(120, Math.min(desiredSize, maxSize));
+    const x0 = hudW - size - edge;
+    const y0 = edge;
+    const btnSize = (isCompactHud ? 24 : 30) * hudScale;
+    exitButton.style.width = `${btnSize}px`;
+    exitButton.style.height = `${btnSize}px`;
+    exitButton.style.left = `${(x0 + size - btnSize * 0.7) * hudScale}px`;
+    exitButton.style.top = `${(y0 - btnSize * 0.4) * hudScale}px`;
+    exitButton.style.display = "block";
+  }
+  if (terminateButton) {
+    const edge = isCompactHud ? 12 : 20;
+    const basePanelW = Math.min(isCompactHud ? 260 : 320, hudW - edge * 2);
+    const panelW = basePanelW * 0.8;
+    const panelH = isCompactHud ? 70 : 78;
+    const x = edge;
+    const y = hudH - panelH - (isCompactHud ? 10 : 16);
+    terminateButton.style.left = `${x * hudScale}px`;
+    terminateButton.style.top = `${y * hudScale}px`;
+    terminateButton.style.width = `${panelW * hudScale}px`;
+    terminateButton.style.height = `${panelH * hudScale}px`;
+    terminateButton.style.display = ship.fuel <= 0 && !pendingGameOver ? "flex" : "none";
+  }
   drawStatusHud(
     ctx,
     ship,
@@ -4081,6 +4098,16 @@ requestAnimationFrame(loop);
     }
   }
 
+  function requestExitToMenu() {
+    if (!running) {
+      return;
+    }
+    exitToMenu();
+    if (onExitToMenu) {
+      onExitToMenu();
+    }
+  }
+
   function exitToMenu() {
     if (!running) {
       return;
@@ -4105,10 +4132,7 @@ requestAnimationFrame(loop);
   }
 
   function updateZoom(dt) {
-    let zoomDir = 0;
-    if (keys["z"]) zoomDir -= 1;
-    if (keys["x"]) zoomDir += 1;
-    const zoomDelta = zoomDir * ZOOM.SPEED * dt + wheelZoomStep;
+    const zoomDelta = wheelZoomStep;
     if (zoomDelta === 0) {
       return;
     }

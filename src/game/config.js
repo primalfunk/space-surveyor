@@ -911,8 +911,8 @@ const AUDIO = {
     got_gate: { src: "assets/sounds/mp3/got_gate.mp3", volume: 1 },
     got_survey: { src: "assets/sounds/mp3/got_survey.mp3", volume: 0.7 },
     game_over: { src: "assets/sounds/mp3/game_over.mp3", volume: 0.6 },
-    thrust: { src: "assets/sounds/mp3/thrust.mp3", volume: 0.4 },
-    thrust_rotate: { src: "assets/sounds/mp3/thrust.mp3", volume: 0 }
+    thrust: { src: "assets/sounds/mp3/thrust.mp3", volume: 0.4, loopMode: "native" },
+    thrust_rotate: { src: "assets/sounds/mp3/thrust.mp3", volume: 0, loopMode: "native" }
   },
   MUSIC: {
     TRACKS: [

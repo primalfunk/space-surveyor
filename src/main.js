@@ -3,9 +3,20 @@ import { showStartScreen } from "./ui/startScreen.js";
 import { showGameOverModal } from "./ui/gameoverModal.js";
 import { loadGameState, resetGameState } from "./game/gameState.js";
 import { loadSectorIndex, resetSectorIndex } from "./game/sectorIndex.js";
+import { sounds, music } from "./game/audio.js";
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
+
+let audioUnlocked = false;
+const unlockAudio = () => {
+  if (audioUnlocked) {
+    return;
+  }
+  audioUnlocked = true;
+  sounds.unlock();
+  music.unlock();
+};
 
 function resize() {
   canvas.width = window.innerWidth;
@@ -14,12 +25,30 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
+const handleFirstInput = () => {
+  unlockAudio();
+  window.removeEventListener("pointerdown", handleFirstInput);
+  window.removeEventListener("touchstart", handleFirstInput);
+};
+
+window.addEventListener("pointerdown", handleFirstInput, { passive: true });
+window.addEventListener("touchstart", handleFirstInput, { passive: true });
+
 const uiRoot = document.getElementById("ui-root");
 let gameController = null;
 let demoController = null;
 let escListener = null;
 let gameState = loadGameState();
 let sectorIndex = loadSectorIndex();
+
+function exitToMenuFromUI() {
+  if (escListener) {
+    window.removeEventListener("keydown", escListener);
+    escListener = null;
+  }
+  gameController = null;
+  showStartScreenWithDemo();
+}
 
 function resetWorld() {
   gameState = resetGameState();
@@ -37,7 +66,8 @@ function startDemo() {
   stopDemo();
   demoController = startGame(canvas, ctx, uiRoot, null, null, null, {
     demoMode: true,
-    autopilotDefault: true
+    autopilotDefault: true,
+    onExitToMenu: () => showStartScreenWithDemo()
   });
 }
 
@@ -64,6 +94,8 @@ function beginGame() {
     showGameOverModal(uiRoot, stats, () => {
       showStartScreenWithDemo();
     });
+  }, {
+    onExitToMenu: () => exitToMenuFromUI()
   });
 
   escListener = (event) => {

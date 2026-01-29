@@ -120,7 +120,7 @@ app.post("/api/score", (req, res) => {
 
 app.use(express.static(ROOT_DIR));
 
-app.get("*", (req, res) => {
+app.get(/.*/, (req, res) => {
   res.sendFile(path.join(ROOT_DIR, "index.html"));
 });
 

@@ -15,7 +15,7 @@ export function showLevelCompleteModal(root, onClose) {
 
   const subtitle = document.createElement("div");
   subtitle.className = "level-complete-subtitle";
-  subtitle.textContent = "Press any key to return";
+  subtitle.textContent = "Tap to return";
 
   panel.appendChild(title);
   panel.appendChild(subtitle);
@@ -34,17 +34,10 @@ export function showLevelCompleteModal(root, onClose) {
     }
   };
 
-  const onKeyDown = (event) => {
-    event.preventDefault();
-    close();
-  };
-
   overlay.addEventListener("pointerdown", close);
-  window.addEventListener("keydown", onKeyDown);
 
   function cleanup() {
     overlay.removeEventListener("pointerdown", close);
-    window.removeEventListener("keydown", onKeyDown);
     overlay.remove();
   }
 

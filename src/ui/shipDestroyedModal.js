@@ -15,7 +15,7 @@ export function showShipDestroyedModal(root, _remainingLives, onClose) {
 
   const subtitle = document.createElement("div");
   subtitle.className = "ship-destroyed-subtitle";
-  subtitle.textContent = "Press Space to continue";
+  subtitle.textContent = "Tap to continue";
 
   panel.appendChild(title);
   panel.appendChild(subtitle);
@@ -39,19 +39,18 @@ export function showShipDestroyedModal(root, _remainingLives, onClose) {
     }
   };
 
-  const onKeyDown = (event) => {
-    if (!canClose || event.repeat || event.code !== "Space") {
+  const onPointerDown = () => {
+    if (!canClose) {
       return;
     }
-    event.preventDefault();
     close();
   };
 
-  window.addEventListener("keydown", onKeyDown);
+  overlay.addEventListener("pointerdown", onPointerDown);
 
   function cleanup() {
     window.clearTimeout(unlockTimer);
-    window.removeEventListener("keydown", onKeyDown);
+    overlay.removeEventListener("pointerdown", onPointerDown);
     overlay.remove();
   }
 

@@ -138,15 +138,7 @@ export function showGameOverModal(root, stats, onClose) {
     }
   };
 
-  const onKeyDown = (event) => {
-    if (canClose) {
-      event.preventDefault();
-      close();
-    }
-  };
-
   overlay.addEventListener("pointerdown", close);
-  window.addEventListener("keydown", onKeyDown);
 
   const finalScore = Math.round(stats?.score || 0);
 
@@ -158,7 +150,7 @@ export function showGameOverModal(root, stats, onClose) {
   const showLeaderboard = (scores) => {
     content.innerHTML = "";
     content.appendChild(renderLeaderboard(scores));
-    subtitle.textContent = "Press any key to return";
+    subtitle.textContent = "Tap to return";
     canClose = true;
   };
 
@@ -256,7 +248,7 @@ export function showGameOverModal(root, stats, onClose) {
 
   const loadLeaderboard = async () => {
     if (finalScore < MIN_QUALIFY_SCORE) {
-      subtitle.textContent = `Score below ${MIN_QUALIFY_SCORE}. Press any key to return`;
+      subtitle.textContent = `Score below ${MIN_QUALIFY_SCORE}. Tap to return`;
       content.innerHTML = "";
       canClose = true;
       return;
@@ -285,7 +277,6 @@ export function showGameOverModal(root, stats, onClose) {
 
   function cleanup() {
     overlay.removeEventListener("pointerdown", close);
-    window.removeEventListener("keydown", onKeyDown);
     overlay.remove();
   }
 

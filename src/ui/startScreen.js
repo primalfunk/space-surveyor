@@ -15,7 +15,7 @@ export function showStartScreen(root, onStart, onReset) {
 
   const title = document.createElement("div");
   title.className = "start-title";
-  title.textContent = "Space Surveyor";
+  title.textContent = "Space Surveyor (V1)";
 
   const subtitle = document.createElement("div");
   subtitle.className = "start-subtitle";
@@ -24,7 +24,7 @@ export function showStartScreen(root, onStart, onReset) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "start-button start-capsule";
-  button.textContent = "Press Space to Start";
+  button.textContent = "Tap to Start";
 
 
   const blurb = document.createElement("div");
@@ -51,13 +51,9 @@ export function showStartScreen(root, onStart, onReset) {
   const controlsList = document.createElement("div");
   controlsList.className = "start-controls-list";
   const controlEntries = [
-    { keys: "WASD / ARROWS", desc: "Steer and thrust" },
     { keys: "TOUCH", desc: "Left stick to steer/thrust, right button to fire" },
-    { keys: "M", desc: "Toggle mouse aim" },
     { keys: "MOUSE", desc: "Aim / LMB fire / RMB thrust" },
-    { keys: "Z / X", desc: "Zoom Camera out / in" },
-    { keys: "Q (OUT OF FUEL)", desc: "Terminate when stranded" },
-    { keys: "ESC", desc: "Return to start" }
+    { keys: "HUD", desc: "Tap X to return to start" }
   ];
   for (const entry of controlEntries) {
     const row = document.createElement("div");
@@ -221,7 +217,7 @@ export function showStartScreen(root, onStart, onReset) {
     slides[slideIndex].classList.remove("is-active");
     slideIndex = (slideIndex + 1) % slides.length;
     slides[slideIndex].classList.add("is-active");
-  }, 6000);
+  }, 4200);
 
   panel.appendChild(title);
   panel.appendChild(subtitle);
@@ -234,11 +230,6 @@ export function showStartScreen(root, onStart, onReset) {
   const bgLayer = document.createElement("div");
   bgLayer.className = "start-bg-layer";
   overlay.appendChild(bgLayer);
-
-  const credit = document.createElement("div");
-  credit.className = "start-credit";
-  credit.innerHTML = 'a game by <span class="start-subtitle-name">wingtipstudio.com</span> &middot; All Rights Reserved';
-  overlay.appendChild(credit);
 
   const bgObjects = createBackgroundObjects(bgLayer, 6, 4);
 
@@ -258,18 +249,9 @@ export function showStartScreen(root, onStart, onReset) {
     }
   };
 
-  const onKeyDown = (event) => {
-    if (event.code === "Space") {
-      event.preventDefault();
-      start(true);
-    }
-  };
-
   button.addEventListener("click", () => start(true));
-  window.addEventListener("keydown", onKeyDown);
 
   function cleanup() {
-    window.removeEventListener("keydown", onKeyDown);
     button.removeEventListener("click", start);
     for (const obj of bgObjects) {
       obj.stop();
