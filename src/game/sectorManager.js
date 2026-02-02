@@ -1,18 +1,23 @@
 import { Star } from "../entities/star.js";
 import { Goal } from "../entities/goal.js";
-import { EndZone } from "../entities/endZone.js";
 import { Asteroid } from "../entities/asteroid.js";
+import { ApseRing } from "../entities/apseRing.js";
+import { ApseBackground } from "../entities/apseBackground.js";
+import { generateApseInterior } from "../entities/apseInterior.js";
+import { ApseMetalTexture } from "../entities/apseMetalTexture.js";
+import { PalimpsestFragment } from "../entities/palimpsestFragment.js";
 import { clamp, createRng, hashInts, pickWeighted, randomInt, randomRange } from "./rng.js";
 import { getSectorMeta, saveSectorIndex, setSectorMeta } from "./sectorIndex.js";
 import { saveGameState } from "./gameState.js";
 import { CONFIG } from "./config.js";
 import { getFieldTypeForSector } from "./riverNetwork.js";
 import { getStationInfoForSector, pickStationPosition } from "./stationSystem.js";
+import { CLUE_TOTAL } from "../data/clues.js";
 
 export const SECTOR_SIZE = CONFIG.SECTOR.SIZE;
 export const SECTOR_TYPES = CONFIG.SECTOR.TYPES;
 
-const { SECTOR, STAR: STAR_CONFIG, ASTEROID, GOAL, END_ZONE, FIELD, STATION } = CONFIG;
+const { SECTOR, STAR: STAR_CONFIG, ASTEROID, GOAL, FIELD, STATION, SHIP } = CONFIG;
 const STAR_GEN = STAR_CONFIG.GENERATION;
 const STAR = STAR_GEN;
 const STAR_WELL = STAR_GEN.WELL;
@@ -37,6 +42,49 @@ const STATION_SAFE_RADIUS = STATION.SAFE_ZONE_RADIUS;
 const ZONES = SECTOR.ZONES;
 const FIELD_TYPES = FIELD.TYPES;
 const PATTERN_VERSION = 1;
+const APSE = SECTOR.APSE ?? {};
+const MERIDIAN = SECTOR.MERIDIAN ?? {};
+const PALIMPSEST = SECTOR.PALIMPSEST ?? {};
+const PALIMPSEST_SINGULARITY = PALIMPSEST.SINGULARITY ?? {};
+const PALIMPSEST_FRAGMENTS = PALIMPSEST.FRAGMENTS ?? {};
+const SHIP_RADIUS = Number.isFinite(SHIP?.COLLISION_RADIUS) ? SHIP.COLLISION_RADIUS : 12;
+const MERIDIAN_SPINE_MULTIPLIER = Number.isFinite(MERIDIAN.SPINE_WIDTH_MULTIPLIER)
+  ? MERIDIAN.SPINE_WIDTH_MULTIPLIER
+  : 1;
+const SPECIAL_TYPES = new Set([
+  SECTOR_TYPES.APSE,
+  SECTOR_TYPES.QUIET_REACH,
+  SECTOR_TYPES.MERIDIAN,
+  SECTOR_TYPES.PALIMPSEST
+]);
+const APSE_GRID_SIZE = 4;
+const APSE_BLOCK_CHANCE = 0.33;
+const QUIET_REACH_BLOCK_CHANCE = 0.5;
+const MERIDIAN_BLOCK_CHANCE = 0.25;
+const PALIMPSEST_BLOCK_CHANCE = 0.15;
+const SPECIAL_BLOCK_EXCLUSION = 1;
+const QUIET_REACH_BLOCK_SALT = SEED_SALT.SPECIAL + 11;
+const QUIET_REACH_OFFSET_SALT = SEED_SALT.SPECIAL + 12;
+const MERIDIAN_BLOCK_SALT = SEED_SALT.SPECIAL + 13;
+const MERIDIAN_OFFSET_SALT = SEED_SALT.SPECIAL + 14;
+const PALIMPSEST_BLOCK_SALT = SEED_SALT.SPECIAL + 15;
+const PALIMPSEST_OFFSET_SALT = SEED_SALT.SPECIAL + 16;
+const FORCE_APSE_NEAR_ORIGIN = Boolean(APSE.FORCE_NEAR_ORIGIN);
+const FORCE_APSE_RING = Number.isFinite(APSE.FORCE_NEAR_ORIGIN_RING)
+  ? Math.max(0, Math.floor(APSE.FORCE_NEAR_ORIGIN_RING))
+  : 1;
+const FORCE_APSE_SECTOR = Number.isFinite(APSE.FORCE_SECTOR?.sx) && Number.isFinite(APSE.FORCE_SECTOR?.sy)
+  ? { sx: Math.floor(APSE.FORCE_SECTOR.sx), sy: Math.floor(APSE.FORCE_SECTOR.sy) }
+  : null;
+let cachedForcedApse = null;
+const FORCE_MERIDIAN_NEAR_ORIGIN = Boolean(MERIDIAN.FORCE_NEAR_ORIGIN);
+const FORCE_MERIDIAN_SECTOR = Number.isFinite(MERIDIAN.FORCE_SECTOR?.sx) && Number.isFinite(MERIDIAN.FORCE_SECTOR?.sy)
+  ? { sx: Math.floor(MERIDIAN.FORCE_SECTOR.sx), sy: Math.floor(MERIDIAN.FORCE_SECTOR.sy) }
+  : { sx: 0, sy: -1 };
+const FORCE_PALIMPSEST_NEAR_ORIGIN = Boolean(PALIMPSEST.FORCE_NEAR_ORIGIN);
+const FORCE_PALIMPSEST_SECTOR = Number.isFinite(PALIMPSEST.FORCE_SECTOR?.sx) && Number.isFinite(PALIMPSEST.FORCE_SECTOR?.sy)
+  ? { sx: Math.floor(PALIMPSEST.FORCE_SECTOR.sx), sy: Math.floor(PALIMPSEST.FORCE_SECTOR.sy) }
+  : { sx: 0, sy: -1 };
 
 
 function randomPointInBounds(rng, bounds, margin) {
@@ -49,6 +97,96 @@ function randomPointInBounds(rng, bounds, margin) {
 function applyVariance(rng, value, variance) {
   const factor = 1 - variance + rng() * (variance * 2);
   return value * factor;
+}
+
+function buildMeridianParams(seed) {
+  const rng = createRng(seed);
+  return {
+    axisAngle: rng() * Math.PI,
+    sideSign: rng() < 0.5 ? -1 : 1
+  };
+}
+
+function buildPalimpsestSingularity(bounds, seed) {
+  const center = {
+    x: bounds.x + bounds.size / 2,
+    y: bounds.y + bounds.size / 2
+  };
+  const rng = createRng(seed);
+  const type = STAR_TYPES.singularity ?? STAR_TYPES.blue;
+  const baseMass = randomRange(rng, STAR.MASS_MIN, STAR.MASS_MAX);
+  const mass = baseMass * type.massMultiplier * (PALIMPSEST_SINGULARITY.MASS_MULTIPLIER ?? 1);
+  const radius = Math.max(1, bounds.size * (PALIMPSEST_SINGULARITY.RADIUS_RATIO ?? 0.08));
+  const gravityRadius = Math.max(radius * 1.1, bounds.size * (PALIMPSEST_SINGULARITY.GRAVITY_RATIO ?? 0.48));
+  const rimThickness = radius * (PALIMPSEST_SINGULARITY.RIM_THICKNESS_RATIO ?? 0.12);
+  const flashArcSpan = (PALIMPSEST_SINGULARITY.FLASH_ARC_SPAN_DEG ?? 70) * Math.PI / 180;
+  return new Star(center.x, center.y, {
+    mass,
+    bodyRadius: radius,
+    gravityRadius,
+    bodyColor: type.bodyColor ?? "rgb(12, 12, 18)",
+    wellFill: type.wellFill ?? "rgba(20, 22, 30, 0.18)",
+    wellStroke: type.wellStroke ?? "rgba(80, 90, 120, 0.22)",
+    minimapColor: type.minimapColor ?? "rgb(80, 90, 120)",
+    spriteKey: type.spriteKey ?? "singularity",
+    rotation: 0,
+    rotationSpeed: 0,
+    pulseSpeed: PALIMPSEST_SINGULARITY.SHIMMER_SPEED ?? 0.35,
+    pulseAmount: PALIMPSEST_SINGULARITY.SHIMMER_AMOUNT ?? 0.45,
+    pulsePhase: randomRange(rng, 0, Math.PI * 2),
+    special: {
+      type: "singularity",
+      rimColor: PALIMPSEST_SINGULARITY.RIM_COLOR ?? "rgba(140, 160, 200, 0.6)",
+      rimBright: PALIMPSEST_SINGULARITY.RIM_BRIGHT ?? "rgba(210, 230, 255, 0.8)",
+      rimThickness,
+      shimmerAmount: PALIMPSEST_SINGULARITY.SHIMMER_AMOUNT ?? 0.45,
+      flashDuration: PALIMPSEST_SINGULARITY.FLASH_DURATION ?? 0.35,
+      flashAlpha: PALIMPSEST_SINGULARITY.FLASH_ALPHA ?? 0.7,
+      flashArcSpan,
+      flashColors: Array.isArray(PALIMPSEST_SINGULARITY.FLASH_COLORS)
+        ? PALIMPSEST_SINGULARITY.FLASH_COLORS
+        : []
+    }
+  });
+}
+
+function buildPalimpsestFragments(bounds, seed, center) {
+  const rng = createRng(seed);
+  const sprites = Array.isArray(PALIMPSEST_FRAGMENTS.SPRITES) ? PALIMPSEST_FRAGMENTS.SPRITES : [];
+  const count = Math.max(1, sprites.length || 6);
+  const rMax = bounds.size * 0.5;
+  const orbitMin = rMax * (PALIMPSEST_FRAGMENTS.ORBIT_MIN_RATIO ?? 0.22);
+  const orbitMax = rMax * (PALIMPSEST_FRAGMENTS.ORBIT_MAX_RATIO ?? 0.68);
+  const radius = rMax * (PALIMPSEST_FRAGMENTS.RADIUS_RATIO ?? 0.04);
+  const minSpacing = radius * 2.2;
+  const baseStep = (orbitMax - orbitMin) / Math.max(1, count - 1);
+  const step = Math.max(baseStep, minSpacing);
+  const span = step * Math.max(0, count - 1);
+  const start = orbitMin + Math.max(0, (orbitMax - orbitMin - span) * 0.5);
+  const orbitAngle = randomRange(rng, 0, Math.PI * 2);
+  const fragments = [];
+  for (let i = 0; i < count; i++) {
+    const orbitRadius = start + step * i;
+    const orbitSpeed = randomRange(rng, PALIMPSEST_FRAGMENTS.ORBIT_SPEED_MIN ?? 0.012, PALIMPSEST_FRAGMENTS.ORBIT_SPEED_MAX ?? 0.028)
+      * (rng() < 0.5 ? -1 : 1);
+    const spinSpeed = randomRange(rng, PALIMPSEST_FRAGMENTS.SPIN_SPEED_MIN ?? 0.08, PALIMPSEST_FRAGMENTS.SPIN_SPEED_MAX ?? 0.22)
+      * (rng() < 0.5 ? -1 : 1);
+    const orbitPhase = randomRange(rng, 0, Math.PI * 2);
+    const eccentricity = PALIMPSEST_FRAGMENTS.ORBIT_ECCENTRICITY ?? 0.12;
+    fragments.push(new PalimpsestFragment({
+      center,
+      orbitRadius,
+      orbitSpeed,
+      orbitPhase,
+      orbitAngle,
+      eccentricity,
+      radius,
+      spinSpeed,
+      spriteIndex: i,
+      bounce: PALIMPSEST_FRAGMENTS.BOUNCE ?? 0.82
+    }));
+  }
+  return fragments;
 }
 
 function getStarTypeConfig(typeId) {
@@ -158,6 +296,10 @@ function chooseSectorMood(rng, sectorType, exposure) {
   if (sectorType === SECTOR_TYPES.ECHO) return "FAMILIAR";
   if (sectorType === SECTOR_TYPES.DERELICT_FIELD) return "ARTIFICIAL";
   if (sectorType === SECTOR_TYPES.SIGNAL_ORIGIN) return "UNSETTLING";
+  if (sectorType === SECTOR_TYPES.QUIET_REACH) return "QUIET";
+  if (sectorType === SECTOR_TYPES.MERIDIAN) return "FAMILIAR";
+  if (sectorType === SECTOR_TYPES.PALIMPSEST) return "UNSETTLING";
+  if (sectorType === SECTOR_TYPES.APSE) return "ARTIFICIAL";
 
   const moods = exposure >= 0.6 ? ["NEUTRAL", "QUIET", "FAMILIAR"] : ["NEUTRAL", "QUIET"];
   return moods[randomInt(rng, 0, moods.length - 1)];
@@ -171,6 +313,209 @@ function scaleCountRange(range, multiplier) {
   const min = Math.max(0, Math.floor(range.min * multiplier));
   const max = Math.max(min, Math.floor(range.max * multiplier));
   return { min, max };
+}
+
+function getClueProgress(gameState) {
+  const total = Math.max(0, Math.floor(gameState?.clues?.totalCollected ?? 0));
+  if (!Number.isFinite(CLUE_TOTAL) || CLUE_TOTAL <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, total / CLUE_TOTAL));
+}
+
+function getForcedApseSector(worldSeed) {
+  if (!FORCE_APSE_NEAR_ORIGIN) {
+    return null;
+  }
+  if (FORCE_APSE_SECTOR) {
+    return { seed: worldSeed, sx: FORCE_APSE_SECTOR.sx, sy: FORCE_APSE_SECTOR.sy };
+  }
+  if (cachedForcedApse?.seed === worldSeed) {
+    return cachedForcedApse;
+  }
+  const candidates = [];
+  for (let sx = -1; sx <= 1; sx++) {
+    for (let sy = -1; sy <= 1; sy++) {
+      candidates.push({ sx, sy });
+    }
+  }
+  const seed = hashInts(worldSeed, 0, 0, SEED_SALT.SPECIAL + 9);
+  const rng = createRng(seed);
+  const pick = candidates[randomInt(rng, 0, candidates.length - 1)];
+  cachedForcedApse = { seed: worldSeed, sx: pick.sx, sy: pick.sy };
+  return cachedForcedApse;
+}
+
+function isForcedApseSector(worldSeed, sx, sy, ring) {
+  if (!FORCE_APSE_NEAR_ORIGIN) {
+    return false;
+  }
+  if (ring > FORCE_APSE_RING) {
+    return false;
+  }
+  const forced = getForcedApseSector(worldSeed);
+  return Boolean(forced && forced.sx === sx && forced.sy === sy);
+}
+
+function isForcedMeridianSector(worldSeed, sx, sy) {
+  if (!FORCE_MERIDIAN_NEAR_ORIGIN) {
+    return false;
+  }
+  return sx === FORCE_MERIDIAN_SECTOR.sx && sy === FORCE_MERIDIAN_SECTOR.sy;
+}
+
+function isForcedPalimpsestSector(worldSeed, sx, sy) {
+  if (!FORCE_PALIMPSEST_NEAR_ORIGIN) {
+    return false;
+  }
+  return sx === FORCE_PALIMPSEST_SECTOR.sx && sy === FORCE_PALIMPSEST_SECTOR.sy;
+}
+
+function getApseOffset(worldSeed, gx, gy) {
+  const seed = hashInts(worldSeed, gx, gy, SEED_SALT.SPECIAL);
+  const rng = createRng(seed);
+  return {
+    ox: randomInt(rng, 0, APSE_GRID_SIZE - 1),
+    oy: randomInt(rng, 0, APSE_GRID_SIZE - 1)
+  };
+}
+
+function getSpecialOffset(worldSeed, gx, gy, salt) {
+  const seed = hashInts(worldSeed, gx, gy, salt);
+  const rng = createRng(seed);
+  return {
+    ox: randomInt(rng, 0, APSE_GRID_SIZE - 1),
+    oy: randomInt(rng, 0, APSE_GRID_SIZE - 1)
+  };
+}
+
+function getSpecialBlockValue(worldSeed, gx, gy, salt) {
+  const seed = hashInts(worldSeed, gx, gy, salt);
+  const rng = createRng(seed);
+  return rng();
+}
+
+function shouldClaimSpecialBlock(worldSeed, gx, gy, chance, salt) {
+  const value = getSpecialBlockValue(worldSeed, gx, gy, salt);
+  if (value >= chance) {
+    return false;
+  }
+  for (let dx = -SPECIAL_BLOCK_EXCLUSION; dx <= SPECIAL_BLOCK_EXCLUSION; dx++) {
+    for (let dy = -SPECIAL_BLOCK_EXCLUSION; dy <= SPECIAL_BLOCK_EXCLUSION; dy++) {
+      if (dx === 0 && dy === 0) {
+        continue;
+      }
+      const neighborValue = getSpecialBlockValue(worldSeed, gx + dx, gy + dy, salt);
+      if (neighborValue < value && neighborValue < chance) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function shouldSpawnApseBlock(worldSeed, gx, gy) {
+  return shouldClaimSpecialBlock(worldSeed, gx, gy, APSE_BLOCK_CHANCE, SEED_SALT.SPECIAL + 7);
+}
+
+function getSpecialBlockType(worldSeed, gx, gy) {
+  if (shouldClaimSpecialBlock(worldSeed, gx, gy, APSE_BLOCK_CHANCE, SEED_SALT.SPECIAL + 7)) {
+    return SECTOR_TYPES.APSE;
+  }
+  if (shouldClaimSpecialBlock(worldSeed, gx, gy, QUIET_REACH_BLOCK_CHANCE, QUIET_REACH_BLOCK_SALT)) {
+    return SECTOR_TYPES.QUIET_REACH;
+  }
+  if (shouldClaimSpecialBlock(worldSeed, gx, gy, MERIDIAN_BLOCK_CHANCE, MERIDIAN_BLOCK_SALT)) {
+    return SECTOR_TYPES.MERIDIAN;
+  }
+  if (shouldClaimSpecialBlock(worldSeed, gx, gy, PALIMPSEST_BLOCK_CHANCE, PALIMPSEST_BLOCK_SALT)) {
+    return SECTOR_TYPES.PALIMPSEST;
+  }
+  return null;
+}
+
+function getSpecialOffsetForType(worldSeed, gx, gy, type) {
+  switch (type) {
+    case SECTOR_TYPES.APSE:
+      return getApseOffset(worldSeed, gx, gy);
+    case SECTOR_TYPES.QUIET_REACH:
+      return getSpecialOffset(worldSeed, gx, gy, QUIET_REACH_OFFSET_SALT);
+    case SECTOR_TYPES.MERIDIAN:
+      return getSpecialOffset(worldSeed, gx, gy, MERIDIAN_OFFSET_SALT);
+    case SECTOR_TYPES.PALIMPSEST:
+      return getSpecialOffset(worldSeed, gx, gy, PALIMPSEST_OFFSET_SALT);
+    default:
+      return { ox: 0, oy: 0 };
+  }
+}
+
+function isApseSector(worldSeed, sx, sy) {
+  const ring = Math.max(Math.abs(sx), Math.abs(sy));
+  if (isForcedMeridianSector(worldSeed, sx, sy) || isForcedPalimpsestSector(worldSeed, sx, sy)) {
+    return false;
+  }
+  if (isForcedApseSector(worldSeed, sx, sy, ring)) {
+    return true;
+  }
+  const gx = Math.floor(sx / APSE_GRID_SIZE);
+  const gy = Math.floor(sy / APSE_GRID_SIZE);
+  if (getSpecialBlockType(worldSeed, gx, gy) !== SECTOR_TYPES.APSE) {
+    return false;
+  }
+  const { ox, oy } = getSpecialOffsetForType(worldSeed, gx, gy, SECTOR_TYPES.APSE);
+  return sx === gx * APSE_GRID_SIZE + ox && sy === gy * APSE_GRID_SIZE + oy;
+}
+
+function isAdjacentToApse(worldSeed, sx, sy) {
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      if (dx === 0 && dy === 0) {
+        continue;
+      }
+      if (isApseSector(worldSeed, sx + dx, sy + dy)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function shouldBeQuietReach(worldSeed, sx, sy, ring, progress) {
+  if (ring <= 0) {
+    return false;
+  }
+  const gx = Math.floor(sx / APSE_GRID_SIZE);
+  const gy = Math.floor(sy / APSE_GRID_SIZE);
+  if (getSpecialBlockType(worldSeed, gx, gy) !== SECTOR_TYPES.QUIET_REACH) {
+    return false;
+  }
+  const { ox, oy } = getSpecialOffsetForType(worldSeed, gx, gy, SECTOR_TYPES.QUIET_REACH);
+  return sx === gx * APSE_GRID_SIZE + ox && sy === gy * APSE_GRID_SIZE + oy;
+}
+
+function pickSpecialSectorType(worldSeed, sx, sy, ring, progress) {
+  if (isForcedPalimpsestSector(worldSeed, sx, sy)) {
+    return SECTOR_TYPES.PALIMPSEST;
+  }
+  if (isForcedMeridianSector(worldSeed, sx, sy)) {
+    return SECTOR_TYPES.MERIDIAN;
+  }
+  if (isForcedApseSector(worldSeed, sx, sy, ring)) {
+    return SECTOR_TYPES.APSE;
+  }
+  if (ring <= 0) {
+    return null;
+  }
+  const gx = Math.floor(sx / APSE_GRID_SIZE);
+  const gy = Math.floor(sy / APSE_GRID_SIZE);
+  const blockType = getSpecialBlockType(worldSeed, gx, gy);
+  if (!blockType) {
+    return null;
+  }
+  const { ox, oy } = getSpecialOffsetForType(worldSeed, gx, gy, blockType);
+  return sx === gx * APSE_GRID_SIZE + ox && sy === gy * APSE_GRID_SIZE + oy
+    ? blockType
+    : null;
 }
 
 function mutateEchoTag(value, rng) {
@@ -274,6 +619,22 @@ function getFieldTypeForPattern(patternId, fallback) {
   if (patternId === "CLUSTER_BEHAVIOR") return FIELD_TYPES.CHAOTIC_CLUSTER;
   if (patternId === "CHAOTIC_BEHAVIOR") return FIELD_TYPES.SPARSE_VOID;
   return fallback ?? FIELD_TYPES.CHAOTIC_CLUSTER;
+}
+
+function getFieldTypeOverride(sectorType, fallback) {
+  if (sectorType === SECTOR_TYPES.QUIET_REACH) {
+    return FIELD_TYPES.SPARSE_VOID;
+  }
+  if (sectorType === SECTOR_TYPES.APSE) {
+    return FIELD_TYPES.SPARSE_VOID;
+  }
+  if (sectorType === SECTOR_TYPES.MERIDIAN) {
+    return FIELD_TYPES.GEOMETRIC_LATTICE;
+  }
+  if (sectorType === SECTOR_TYPES.PALIMPSEST) {
+    return FIELD_TYPES.CHAOTIC_CLUSTER;
+  }
+  return fallback;
 }
 
 function createStarPattern(rng, bounds, fieldType, patternId) {
@@ -393,9 +754,13 @@ function generateStars(
   safeRadius,
   fieldType,
   patternInfo = {},
-  safetyTargets = null
+  safetyTargets = null,
+  meridian = null
 ) {
   const stars = [];
+  if (!Number.isFinite(starMultiplier) || starMultiplier <= 0) {
+    return stars;
+  }
   const sectorCenter = {
     x: bounds.x + bounds.size / 2,
     y: bounds.y + bounds.size / 2
@@ -417,6 +782,17 @@ function generateStars(
     yellow: randomInt(rng, scaled.yellow.min, scaled.yellow.max),
     blue: randomInt(rng, scaled.blue.min, scaled.blue.max)
   };
+  const hasMeridian = meridian
+    && Number.isFinite(meridian.axisAngle)
+    && Number.isFinite(meridian.spineWidth);
+  if (hasMeridian) {
+    minCounts.red = Math.floor(minCounts.red / 2);
+    minCounts.yellow = Math.floor(minCounts.yellow / 2);
+    minCounts.blue = Math.floor(minCounts.blue / 2);
+    targetCounts.red = Math.floor(targetCounts.red / 2);
+    targetCounts.yellow = Math.floor(targetCounts.yellow / 2);
+    targetCounts.blue = Math.floor(targetCounts.blue / 2);
+  }
   let starBudget = targetCounts.red + targetCounts.yellow + targetCounts.blue;
   const minTotal = minCounts.red + minCounts.yellow + minCounts.blue;
   const isSparseVoid = fieldType === FIELD_TYPES.SPARSE_VOID && ring <= FIELD.VOID_ALLOWED_MAX_RING;
@@ -462,6 +838,13 @@ function generateStars(
   const pattern = createStarPattern(patternRng, bounds, fieldType, patternInfo?.patternId);
   let starIndex = 0;
   let failureStreak = 0;
+  const meridianCenter = hasMeridian
+    ? (meridian.center ?? sectorCenter)
+    : null;
+  const meridianNx = hasMeridian ? -Math.sin(meridian.axisAngle) : 0;
+  const meridianNy = hasMeridian ? Math.cos(meridian.axisAngle) : 0;
+  const meridianSide = hasMeridian ? (Math.sign(meridian.sideSign) || 1) : 1;
+  const meridianSpineHalf = hasMeridian ? meridian.spineWidth * 0.5 : 0;
 
   for (const entry of starPlan) {
     const type = getStarTypeConfig(entry);
@@ -479,17 +862,18 @@ function generateStars(
     const pulseSpeed = randomRange(rng, pulseCfg.speedMin, pulseCfg.speedMax);
     const pulseAmount = pulseCfg.amount;
     const pulsePhase = randomRange(rng, 0, Math.PI * 2);
-    const rotation = randomRange(rng, 0, Math.PI * 2);
-    const motion = null;
+      const rotation = randomRange(rng, 0, Math.PI * 2);
+      const motion = null;
 
-    let pos = null;
-    for (let tries = 0; tries < STAR_PLACEMENT.MAX_TRIES_PER_STAR; tries++) {
-      const candidate = pickStarCandidate(patternRng, bounds, STAR.MARGIN, pattern, starIndex);
-      const centerDx = candidate.x - sectorCenter.x;
-      const centerDy = candidate.y - sectorCenter.y;
-      if (Math.hypot(centerDx, centerDy) < gravityRadius) {
-        continue;
-      }
+      let pos = null;
+      let mirrored = null;
+      for (let tries = 0; tries < STAR_PLACEMENT.MAX_TRIES_PER_STAR; tries++) {
+        const candidate = pickStarCandidate(patternRng, bounds, STAR.MARGIN, pattern, starIndex);
+        const centerDx = candidate.x - sectorCenter.x;
+        const centerDy = candidate.y - sectorCenter.y;
+        if (Math.hypot(centerDx, centerDy) < gravityRadius) {
+          continue;
+        }
       if (safePoint) {
         const dx = candidate.x - safePoint.x;
         const dy = candidate.y - safePoint.y;
@@ -509,26 +893,69 @@ function generateStars(
             continue;
           }
         }
-        if (safetyTargets.endZone && safetyTargets.endZone.minDist !== undefined) {
-          const dx = center.x - safetyTargets.endZone.x;
-          const dy = center.y - safetyTargets.endZone.y;
-          if (Math.hypot(dx, dy) < safetyTargets.endZone.minDist + gravityRadius + radius + buffer) {
-            continue;
-          }
-        }
         if (safetyTargets.beacon && safetyTargets.beacon.minDist !== undefined) {
           const dx = center.x - safetyTargets.beacon.x;
           const dy = center.y - safetyTargets.beacon.y;
           if (Math.hypot(dx, dy) < safetyTargets.beacon.minDist + gravityRadius + radius + buffer) {
             continue;
           }
+          }
         }
-      }
 
-      let overlap = false;
-      for (const star of stars) {
-        const dx = candidate.x - star.x;
-        const dy = candidate.y - star.y;
+        if (hasMeridian && meridianCenter) {
+          const mx = candidate.x - meridianCenter.x;
+          const my = candidate.y - meridianCenter.y;
+          const distToLine = mx * meridianNx + my * meridianNy;
+          if (distToLine * meridianSide <= meridianSpineHalf + gravityRadius) {
+            continue;
+          }
+          const mirrorX = candidate.x - 2 * distToLine * meridianNx;
+          const mirrorY = candidate.y - 2 * distToLine * meridianNy;
+          if (mirrorX < bounds.x + STAR.MARGIN
+            || mirrorX > bounds.x + bounds.size - STAR.MARGIN
+            || mirrorY < bounds.y + STAR.MARGIN
+            || mirrorY > bounds.y + bounds.size - STAR.MARGIN) {
+            continue;
+          }
+          const mirrorCenterDx = mirrorX - sectorCenter.x;
+          const mirrorCenterDy = mirrorY - sectorCenter.y;
+          if (Math.hypot(mirrorCenterDx, mirrorCenterDy) < gravityRadius) {
+            continue;
+          }
+          if (safePoint) {
+            const mdx = mirrorX - safePoint.x;
+            const mdy = mirrorY - safePoint.y;
+            const minDist = Math.max(safeRadius, gravityRadius + 200);
+            if (Math.hypot(mdx, mdy) < minDist) {
+              continue;
+            }
+          }
+          if (safetyTargets && motion) {
+            const center = motion.center ?? candidate;
+            const radius = motion.radius ?? 0;
+            const buffer = STAR_MOTION.SAFETY_BUFFER;
+            if (safetyTargets.goal && safetyTargets.goal.minDist !== undefined) {
+              const mdx = mirrorX - safetyTargets.goal.x;
+              const mdy = mirrorY - safetyTargets.goal.y;
+              if (Math.hypot(mdx, mdy) < safetyTargets.goal.minDist + gravityRadius + radius + buffer) {
+                continue;
+              }
+            }
+            if (safetyTargets.beacon && safetyTargets.beacon.minDist !== undefined) {
+              const mdx = mirrorX - safetyTargets.beacon.x;
+              const mdy = mirrorY - safetyTargets.beacon.y;
+              if (Math.hypot(mdx, mdy) < safetyTargets.beacon.minDist + gravityRadius + radius + buffer) {
+                continue;
+              }
+            }
+          }
+          mirrored = { x: mirrorX, y: mirrorY };
+        }
+
+        let overlap = false;
+        for (const star of stars) {
+          const dx = candidate.x - star.x;
+          const dy = candidate.y - star.y;
         const dist = Math.hypot(dx, dy);
         if (dist < bodyRadius + star.radius) {
           overlap = true;
@@ -537,15 +964,31 @@ function generateStars(
         const minWellDist = (gravityRadius + star.gravityRadius) * 0.9;
         if (dist < minWellDist) {
           overlap = true;
-          break;
+            break;
+          }
         }
+        if (!overlap && mirrored) {
+          for (const star of stars) {
+            const dx = mirrored.x - star.x;
+            const dy = mirrored.y - star.y;
+            const dist = Math.hypot(dx, dy);
+            if (dist < bodyRadius + star.radius) {
+              overlap = true;
+              break;
+            }
+            const minWellDist = (gravityRadius + star.gravityRadius) * 0.9;
+            if (dist < minWellDist) {
+              overlap = true;
+              break;
+            }
+          }
+        }
+        if (overlap) {
+          continue;
+        }
+        pos = candidate;
+        break;
       }
-      if (overlap) {
-        continue;
-      }
-      pos = candidate;
-      break;
-    }
     if (!pos) {
       failureStreak += 1;
       if (failureStreak >= STAR_PLACEMENT.MAX_CONSECUTIVE_FAILURES) {
@@ -554,84 +997,64 @@ function generateStars(
       continue;
     }
 
-    stars.push(new Star(pos.x, pos.y, {
-      mass,
-      bodyRadius,
-      gravityRadius,
-      bodyColor: type.bodyColor,
-      wellFill: type.wellFill,
-      wellStroke: type.wellStroke,
-      minimapColor: type.minimapColor,
-      spriteKey: type.spriteKey,
-      rotation: rotation,
-      rotationSpeed: rotSpeed,
-      pulsePhase,
-      pulseSpeed,
-      pulseAmount,
-      motion
-    }));
-    starIndex += 1;
-    failureStreak = 0;
-  }
+      stars.push(new Star(pos.x, pos.y, {
+        mass,
+        bodyRadius,
+        gravityRadius,
+        bodyColor: type.bodyColor,
+        wellFill: type.wellFill,
+        wellStroke: type.wellStroke,
+        minimapColor: type.minimapColor,
+        spriteKey: type.spriteKey,
+        rotation: rotation,
+        rotationSpeed: rotSpeed,
+        pulsePhase,
+        pulseSpeed,
+        pulseAmount,
+        motion
+      }));
+      if (mirrored) {
+        stars.push(new Star(mirrored.x, mirrored.y, {
+          mass,
+          bodyRadius,
+          gravityRadius,
+          bodyColor: type.bodyColor,
+          wellFill: type.wellFill,
+          wellStroke: type.wellStroke,
+          minimapColor: type.minimapColor,
+          spriteKey: type.spriteKey,
+          rotation: rotation,
+          rotationSpeed: rotSpeed,
+          pulsePhase,
+          pulseSpeed,
+          pulseAmount,
+          motion
+        }));
+      }
+      starIndex += 1;
+      failureStreak = 0;
+    }
   return stars;
 }
 
-function generateEndZone(rng, bounds, goalX, goalY, station = null) {
-  const edges = ["north", "south", "west", "east"];
-  let zone = null;
-
-  for (let i = 0; i < 12; i++) {
-    const edge = edges[randomInt(rng, 0, edges.length - 1)];
-    let x = bounds.x + END_ZONE.MARGIN;
-    let y = bounds.y + END_ZONE.MARGIN;
-
-    if (edge == "north") {
-      x = randomRange(rng, bounds.x + END_ZONE.MARGIN, bounds.x + bounds.size - END_ZONE.MARGIN - END_ZONE.WIDTH);
-      y = bounds.y + END_ZONE.MARGIN;
-    } else if (edge == "south") {
-      x = randomRange(rng, bounds.x + END_ZONE.MARGIN, bounds.x + bounds.size - END_ZONE.MARGIN - END_ZONE.WIDTH);
-      y = bounds.y + bounds.size - END_ZONE.MARGIN - END_ZONE.HEIGHT;
-    } else if (edge == "west") {
-      x = bounds.x + END_ZONE.MARGIN;
-      y = randomRange(rng, bounds.y + END_ZONE.MARGIN, bounds.y + bounds.size - END_ZONE.MARGIN - END_ZONE.HEIGHT);
-    } else {
-      x = bounds.x + bounds.size - END_ZONE.MARGIN - END_ZONE.WIDTH;
-      y = randomRange(rng, bounds.y + END_ZONE.MARGIN, bounds.y + bounds.size - END_ZONE.MARGIN - END_ZONE.HEIGHT);
-    }
-
-    const dx = x - goalX;
-    const dy = y - goalY;
-    if (Math.hypot(dx, dy) < END_ZONE.MIN_GOAL_DIST) {
-      continue;
-    }
-    if (station) {
-      const sx = x - station.x;
-      const sy = y - station.y;
-      if (Math.hypot(sx, sy) < STATION_SAFE_RADIUS) {
-        continue;
-      }
-    }
-
-    zone = new EndZone(x, y, END_ZONE.WIDTH, END_ZONE.HEIGHT);
-    break;
-  }
-
-  if (!zone) {
-    zone = new EndZone(
-      bounds.x + bounds.size - END_ZONE.MARGIN - END_ZONE.WIDTH,
-      bounds.y + bounds.size - END_ZONE.MARGIN - END_ZONE.HEIGHT,
-      END_ZONE.WIDTH,
-      END_ZONE.HEIGHT
-    );
-  }
-
-  return zone;
-}
-
-function generateGoal(rng, bounds, stars, safePoint, safeRadius, anchor = null, station = null) {
+function generateGoal(rng, bounds, stars, safePoint, safeRadius, anchor = null, station = null, meridian = null) {
   let goalX = bounds.x + bounds.size / 2 - GOAL.WIDTH / 2;
   let goalY = bounds.y + bounds.size / 2 - GOAL.HEIGHT / 2;
   const anchorRadius = anchor?.radius ?? GOAL.ANCHOR_RADIUS_DEFAULT;
+  const meridianSideSign = meridian && Number.isFinite(meridian.sideSign)
+    ? Math.sign(meridian.sideSign) || 1
+    : (meridian ? (rng() < 0.5 ? -1 : 1) : 1);
+  const meridianAxis = meridian?.axisAngle;
+  const hasMeridian = meridian && Number.isFinite(meridianAxis) && Number.isFinite(meridian.spineWidth);
+  const meridianNx = hasMeridian ? -Math.sin(meridianAxis) : 0;
+  const meridianNy = hasMeridian ? Math.cos(meridianAxis) : 0;
+  const meridianCenter = hasMeridian
+    ? {
+      x: meridian.center?.x ?? (bounds.x + bounds.size / 2),
+      y: meridian.center?.y ?? (bounds.y + bounds.size / 2)
+    }
+    : null;
+  const meridianClear = hasMeridian ? meridian.spineWidth * 0.5 + GOAL.MARGIN * 0.5 : 0;
 
   for (let i = 0; i < 20; i++) {
     let pos = null;
@@ -665,6 +1088,15 @@ function generateGoal(rng, bounds, stars, safePoint, safeRadius, anchor = null, 
       }
     }
 
+    if (hasMeridian && meridianCenter) {
+      const dx = gx - meridianCenter.x;
+      const dy = gy - meridianCenter.y;
+      const dist = dx * meridianNx + dy * meridianNy;
+      if (dist * meridianSideSign <= meridianClear) {
+        continue;
+      }
+    }
+
     let tooClose = false;
     for (const star of stars) {
       const dx = gx - star.x;
@@ -694,7 +1126,11 @@ function generateGoal(rng, bounds, stars, safePoint, safeRadius, anchor = null, 
 
 function generateAsteroids(rng, bounds, asteroidMultiplier, safePoint, safeRadius, options = {}) {
   const asteroids = [];
-  const count = Math.max(1, Math.round(ASTEROIDS.COUNT * asteroidMultiplier));
+  const targetCount = Math.round(ASTEROIDS.COUNT * asteroidMultiplier);
+  if (targetCount <= 0) {
+    return asteroids;
+  }
+  const count = Math.max(1, targetCount);
   const clusterCount = options.cluster
     ? randomInt(rng, ASTEROID_CLUSTER.COUNT_MIN, ASTEROID_CLUSTER.COUNT_MAX)
     : 0;
@@ -849,6 +1285,15 @@ export class SectorManager {
       normalized.echoTag = pickEchoTag(rng, this.gameState?.history);
       updated = true;
     }
+    if (normalized.sectorType === SECTOR_TYPES.MERIDIAN) {
+      if (!Number.isFinite(normalized.meridianAxisAngle) || !Number.isFinite(normalized.meridianSideSign)) {
+        const meridianSeed = this.getSectorSeed(sx, sy, SEED_SALT.MERIDIAN);
+        const params = buildMeridianParams(meridianSeed);
+        normalized.meridianAxisAngle = params.axisAngle;
+        normalized.meridianSideSign = params.sideSign;
+        updated = true;
+      }
+    }
     if (normalized.sectorType === SECTOR_TYPES.SIGNAL_ORIGIN) {
       if (!normalized.beaconPlaced) {
         normalized.beaconPlaced = true;
@@ -864,39 +1309,54 @@ export class SectorManager {
       normalized.beaconPosition = null;
       updated = true;
     }
-    const stationInfo = getStationInfoForSector(this.worldSeed, sx, sy, ring);
-    if (normalized.hasStation === undefined) {
-      normalized.hasStation = Boolean(stationInfo?.hasStation);
-      updated = true;
-    }
-    if (normalized.hasStation) {
-      if (!normalized.stationId && stationInfo?.stationId) {
-        normalized.stationId = stationInfo.stationId;
-        updated = true;
-      }
-      if (normalized.stationTierCap === undefined) {
-        normalized.stationTierCap = stationInfo?.tierCap ?? null;
-        updated = true;
-      }
-      if (!normalized.stationPos) {
-        const rng = createRng(this.getSectorSeed(sx, sy, SEED_SALT.STATION));
-        normalized.stationPos = pickStationPosition(
-          rng,
-          this.getBounds(sx, sy),
-          safePoint,
-          safeRadius,
-          normalized.beaconPosition
-        );
-        updated = true;
-      }
-      if (normalized.stationDiscovered === undefined) {
-        normalized.stationDiscovered = Boolean(stationInfo?.isStartStation);
+    if (SPECIAL_TYPES.has(normalized.sectorType)) {
+      if (normalized.hasStation !== false
+        || normalized.stationId
+        || normalized.stationPos
+        || normalized.stationDiscovered
+        || normalized.stationTierCap !== null) {
+        normalized.hasStation = false;
+        normalized.stationId = null;
+        normalized.stationPos = null;
+        normalized.stationDiscovered = false;
+        normalized.stationTierCap = null;
         updated = true;
       }
     } else {
-      if (normalized.stationDiscovered === undefined) {
-        normalized.stationDiscovered = false;
+      const stationInfo = getStationInfoForSector(this.worldSeed, sx, sy, ring);
+      if (normalized.hasStation === undefined) {
+        normalized.hasStation = Boolean(stationInfo?.hasStation);
         updated = true;
+      }
+      if (normalized.hasStation) {
+        if (!normalized.stationId && stationInfo?.stationId) {
+          normalized.stationId = stationInfo.stationId;
+          updated = true;
+        }
+        if (normalized.stationTierCap === undefined) {
+          normalized.stationTierCap = stationInfo?.tierCap ?? null;
+          updated = true;
+        }
+        if (!normalized.stationPos) {
+          const rng = createRng(this.getSectorSeed(sx, sy, SEED_SALT.STATION));
+          normalized.stationPos = pickStationPosition(
+            rng,
+            this.getBounds(sx, sy),
+            safePoint,
+            safeRadius,
+            normalized.beaconPosition
+          );
+          updated = true;
+        }
+        if (normalized.stationDiscovered === undefined) {
+          normalized.stationDiscovered = Boolean(stationInfo?.isStartStation);
+          updated = true;
+        }
+      } else {
+        if (normalized.stationDiscovered === undefined) {
+          normalized.stationDiscovered = false;
+          updated = true;
+        }
       }
     }
     if (normalized.visited === undefined) {
@@ -939,21 +1399,28 @@ export class SectorManager {
     const fieldType = getFieldTypeForSector(this.worldSeed, sx, sy);
     const influence = Math.max(0, this.gameState?.beacon?.exposure ?? 0);
     const cooldownReady = this.getCooldownReady();
+    const clueProgress = getClueProgress(this.gameState);
+    const specialType = pickSpecialSectorType(this.worldSeed, sx, sy, ring, clueProgress);
     const typeRng = createRng(this.getSectorSeed(sx, sy, SEED_SALT.TYPE));
-    const sectorType = chooseSectorType(typeRng, influence, ring, cooldownReady);
+    const sectorType = specialType ?? chooseSectorType(typeRng, influence, ring, cooldownReady);
     const moodRng = createRng(this.getSectorSeed(sx, sy, SEED_SALT.MOOD));
     const sectorMood = chooseSectorMood(moodRng, sectorType, influence);
     const anomalyModifier = sectorType === SECTOR_TYPES.ANOMALY
       ? pickAnomalyModifier(createRng(this.getSectorSeed(sx, sy, SEED_SALT.ANOMALY)))
       : null;
-    const echoTag = sectorType === SECTOR_TYPES.ECHO
-      ? pickEchoTag(createRng(this.getSectorSeed(sx, sy, SEED_SALT.ECHO)), this.gameState?.history)
-      : null;
-    const beaconPlaced = sectorType === SECTOR_TYPES.SIGNAL_ORIGIN;
-    const beaconPosition = beaconPlaced
-      ? pickBeaconPosition(createRng(this.getSectorSeed(sx, sy, SEED_SALT.BEACON)), this.getBounds(sx, sy), safePoint, safeRadius)
-      : null;
-    const stationInfo = getStationInfoForSector(this.worldSeed, sx, sy, ring);
+      const echoTag = sectorType === SECTOR_TYPES.ECHO
+        ? pickEchoTag(createRng(this.getSectorSeed(sx, sy, SEED_SALT.ECHO)), this.gameState?.history)
+        : null;
+      const meridianParams = sectorType === SECTOR_TYPES.MERIDIAN
+        ? buildMeridianParams(this.getSectorSeed(sx, sy, SEED_SALT.MERIDIAN))
+        : null;
+      const beaconPlaced = sectorType === SECTOR_TYPES.SIGNAL_ORIGIN;
+      const beaconPosition = beaconPlaced
+        ? pickBeaconPosition(createRng(this.getSectorSeed(sx, sy, SEED_SALT.BEACON)), this.getBounds(sx, sy), safePoint, safeRadius)
+        : null;
+    const stationInfo = SPECIAL_TYPES.has(sectorType)
+      ? { hasStation: false }
+      : getStationInfoForSector(this.worldSeed, sx, sy, ring);
     const hasStation = Boolean(stationInfo?.hasStation);
     const stationId = hasStation ? (priorStation?.stationId ?? stationInfo.stationId) : null;
     const stationTierCap = hasStation ? (priorStation?.stationTierCap ?? stationInfo.tierCap) : null;
@@ -986,12 +1453,14 @@ export class SectorManager {
       visited: false,
       surveyComplete: false,
       lastVisitedAt: null,
-      anomalyModifier,
-      echoTag,
-      patternId,
-      patternParamsSeed,
-      patternVersion: PATTERN_VERSION
-    };
+        anomalyModifier,
+        echoTag,
+        meridianAxisAngle: meridianParams?.axisAngle ?? null,
+        meridianSideSign: meridianParams?.sideSign ?? null,
+        patternId,
+        patternParamsSeed,
+        patternVersion: PATTERN_VERSION
+      };
 
     setSectorMeta(this.sectorIndex, sx, sy, meta);
     if (this.gameState) {
@@ -1034,13 +1503,43 @@ export class SectorManager {
         if (!Number.isFinite(cached.patternVersion)) {
           cached.patternVersion = PATTERN_VERSION;
         }
+        if (cached.sectorType === SECTOR_TYPES.MERIDIAN && !cached.meridian) {
+          const params = buildMeridianParams(this.getSectorSeed(sx, sy, SEED_SALT.MERIDIAN));
+          const spineWidth = SHIP_RADIUS * 2 * MERIDIAN_SPINE_MULTIPLIER;
+          cached.meridian = {
+            center: {
+              x: cached.bounds?.x + cached.bounds?.size / 2,
+              y: cached.bounds?.y + cached.bounds?.size / 2
+            },
+            axisAngle: params.axisAngle,
+            spineWidth,
+            sideSign: params.sideSign,
+            bounds: cached.bounds ?? null
+          };
+        }
+        if (cached.sectorType === SECTOR_TYPES.PALIMPSEST) {
+          const center = {
+            x: cached.bounds?.x + cached.bounds?.size / 2,
+            y: cached.bounds?.y + cached.bounds?.size / 2
+          };
+          if (!cached.palimpsestSingularity || !Array.isArray(cached.stars) || cached.stars.length === 0) {
+            const seed = this.getSectorSeed(sx, sy, SEED_SALT.SPECIAL + 17);
+            const singularity = buildPalimpsestSingularity(cached.bounds, seed);
+            cached.palimpsestSingularity = singularity;
+            cached.stars = singularity ? [singularity] : [];
+          }
+          if (!cached.palimpsestFragments) {
+            const seed = this.getSectorSeed(sx, sy, SEED_SALT.SPECIAL + 18);
+            cached.palimpsestFragments = buildPalimpsestFragments(cached.bounds, seed, center);
+          }
+        }
       }
       return cached;
     }
 
     const ring = Math.max(Math.abs(sx), Math.abs(sy));
     const bounds = this.getBounds(sx, sy);
-    const fieldType = getFieldTypeForSector(this.worldSeed, sx, sy);
+    const baseFieldType = getFieldTypeForSector(this.worldSeed, sx, sy);
     const zone = getZoneConfig(ring);
     const entryOrigin = {
       x: bounds.x + bounds.size / 2,
@@ -1048,31 +1547,62 @@ export class SectorManager {
     };
     const safeRadius = ring === 0 ? this.startSafeRadius : this.entrySafeRadius;
     const meta = this.createSectorMeta(sx, sy, ring, entryOrigin, safeRadius);
+    const fieldType = getFieldTypeOverride(meta.sectorType, baseFieldType);
     const influence = Math.max(0, meta.generatedAtExposure ?? 0);
     const spawnProfile = buildSpawnProfile(meta.sectorType, influence);
     const fieldMultiplier = FIELD.STAR_MULTIPLIERS[fieldType] ?? 1;
-    const patternId = meta.patternId ?? getPatternBehaviorForField(fieldType);
-    const patternParamsSeed = Number.isFinite(meta.patternParamsSeed)
-      ? meta.patternParamsSeed
-      : this.getSectorSeed(sx, sy, SEED_SALT.PATTERN);
-    const patternVersion = Number.isFinite(meta.patternVersion)
-      ? meta.patternVersion
-      : PATTERN_VERSION;
-    const starRng = createRng(this.getSectorSeed(sx, sy, SEED_SALT.STARS));
-    const stars = generateStars(
-      starRng,
-      bounds,
-      ring,
-      spawnProfile.stars * fieldMultiplier,
-      ring === 0 ? entryOrigin : null,
-      ring === 0 ? safeRadius : 0,
-      fieldType,
-      {
-        patternId,
-        patternParamsSeed,
-        patternVersion
-      }
-    );
+    const patternId = SPECIAL_TYPES.has(meta.sectorType)
+      ? getPatternBehaviorForField(fieldType)
+      : (meta.patternId ?? getPatternBehaviorForField(fieldType));
+      const patternParamsSeed = Number.isFinite(meta.patternParamsSeed)
+        ? meta.patternParamsSeed
+        : this.getSectorSeed(sx, sy, SEED_SALT.PATTERN);
+      const patternVersion = Number.isFinite(meta.patternVersion)
+        ? meta.patternVersion
+        : PATTERN_VERSION;
+      const meridianSeed = this.getSectorSeed(sx, sy, SEED_SALT.MERIDIAN);
+      const meridianParams = meta.sectorType === SECTOR_TYPES.MERIDIAN
+        ? buildMeridianParams(meridianSeed)
+        : null;
+      const meridianForStars = meta.sectorType === SECTOR_TYPES.MERIDIAN
+        ? {
+          center: { x: bounds.x + bounds.size / 2, y: bounds.y + bounds.size / 2 },
+          axisAngle: Number.isFinite(meta.meridianAxisAngle) ? meta.meridianAxisAngle : meridianParams?.axisAngle,
+          spineWidth: SHIP_RADIUS * 2 * MERIDIAN_SPINE_MULTIPLIER,
+          sideSign: Number.isFinite(meta.meridianSideSign) ? meta.meridianSideSign : meridianParams?.sideSign,
+          bounds
+        }
+        : null;
+      const isPalimpsest = meta.sectorType === SECTOR_TYPES.PALIMPSEST;
+      const palimpsestCenter = {
+        x: bounds.x + bounds.size / 2,
+        y: bounds.y + bounds.size / 2
+      };
+      const palimpsestSingularity = isPalimpsest
+        ? buildPalimpsestSingularity(bounds, this.getSectorSeed(sx, sy, SEED_SALT.SPECIAL + 17))
+        : null;
+      const palimpsestFragments = isPalimpsest
+        ? buildPalimpsestFragments(bounds, this.getSectorSeed(sx, sy, SEED_SALT.SPECIAL + 18), palimpsestCenter)
+        : null;
+      const starRng = createRng(this.getSectorSeed(sx, sy, SEED_SALT.STARS));
+      const stars = isPalimpsest
+        ? (palimpsestSingularity ? [palimpsestSingularity] : [])
+        : generateStars(
+          starRng,
+          bounds,
+          ring,
+          spawnProfile.stars * fieldMultiplier,
+          ring === 0 ? entryOrigin : null,
+          ring === 0 ? safeRadius : 0,
+          fieldType,
+          {
+            patternId,
+            patternParamsSeed,
+            patternVersion
+          },
+          null,
+          meridianForStars
+        );
     const station = meta.hasStation && meta.stationPos
       ? {
         id: meta.stationId ?? `${sx},${sy}`,
@@ -1086,18 +1616,100 @@ export class SectorManager {
         discovered: Boolean(meta.stationDiscovered)
       }
       : null;
-    const goalAnchor = meta.sectorType === SECTOR_TYPES.SIGNAL_ORIGIN && meta.beaconPosition
-      ? { x: meta.beaconPosition.x, y: meta.beaconPosition.y, radius: 520 }
+      const goalAnchor = meta.sectorType === SECTOR_TYPES.SIGNAL_ORIGIN && meta.beaconPosition
+        ? { x: meta.beaconPosition.x, y: meta.beaconPosition.y, radius: 520 }
+        : null;
+      const goalRng = createRng(this.getSectorSeed(sx, sy, SEED_SALT.GOAL));
+      const meridian = meta.sectorType === SECTOR_TYPES.MERIDIAN
+        ? {
+          center: { x: bounds.x + bounds.size / 2, y: bounds.y + bounds.size / 2 },
+          axisAngle: Number.isFinite(meta.meridianAxisAngle) ? meta.meridianAxisAngle : meridianParams?.axisAngle,
+          spineWidth: SHIP_RADIUS * 2 * MERIDIAN_SPINE_MULTIPLIER,
+          sideSign: Number.isFinite(meta.meridianSideSign)
+            ? Math.sign(meta.meridianSideSign) || 1
+            : meridianParams?.sideSign,
+          bounds
+        }
+        : null;
+      const apseScanCentered = meta.sectorType === SECTOR_TYPES.APSE
+        && (APSE.SCAN_POINT_CENTERED ?? false);
+      const goal = meta.sectorType === SECTOR_TYPES.QUIET_REACH || apseScanCentered
+        ? new Goal(
+          bounds.x + bounds.size / 2 - GOAL.WIDTH / 2,
+          bounds.y + bounds.size / 2 - GOAL.HEIGHT / 2,
+          GOAL.WIDTH,
+          GOAL.HEIGHT,
+          { rotation: 0, rotationSpeed: 0 }
+        )
+        : generateGoal(goalRng, bounds, stars, entryOrigin, safeRadius, goalAnchor, station, meridian);
+    const apseMetalTexture = meta.sectorType === SECTOR_TYPES.APSE && APSE.METAL_TEXTURE?.ENABLED
+      ? new ApseMetalTexture(this.getSectorSeed(sx, sy, SEED_SALT.SPECIAL + 6))
       : null;
-    const goalRng = createRng(this.getSectorSeed(sx, sy, SEED_SALT.GOAL));
-    const goal = generateGoal(goalRng, bounds, stars, entryOrigin, safeRadius, goalAnchor, station);
-    const endZone = generateEndZone(
-      createRng(this.getSectorSeed(sx, sy, SEED_SALT.END_ZONE)),
-      bounds,
-      goal.x,
-      goal.y,
-      station
-    );
+    const apseRing = meta.sectorType === SECTOR_TYPES.APSE
+      ? (() => {
+        const ringRadius = bounds.size * (APSE.RING_RADIUS_RATIO ?? 0.35);
+        const ringThickness = bounds.size * (APSE.RING_THICKNESS_RATIO ?? 0.06);
+        const speedMin = Number.isFinite(APSE.ROT_SPEED_MIN) ? APSE.ROT_SPEED_MIN : 0.003;
+        const speedMax = Number.isFinite(APSE.ROT_SPEED_MAX) ? APSE.ROT_SPEED_MAX : 0.008;
+        const speed = Math.max(0, randomRange(createRng(this.getSectorSeed(sx, sy, SEED_SALT.SPECIAL + 3)), speedMin, speedMax));
+        const ring = new ApseRing(
+          bounds.x + bounds.size / 2,
+          bounds.y + bounds.size / 2,
+          ringRadius,
+          ringThickness,
+          0,
+          speed
+        );
+        ring.ringThickness = ringThickness;
+        ring.metalTexture = apseMetalTexture;
+        return ring;
+      })()
+      : null;
+    const apseBackground = meta.sectorType === SECTOR_TYPES.APSE
+      ? (() => {
+        if (!apseRing) {
+          return null;
+        }
+        const ringRadius = apseRing.radius;
+        const ringThickness = apseRing.ringThickness ?? (bounds.size * (APSE.RING_THICKNESS_RATIO ?? 0.06));
+        const innerEdgeRadius = ringRadius - ringThickness / 2;
+        const seed = this.getSectorSeed(sx, sy, SEED_SALT.SPECIAL + 5);
+        return new ApseBackground(
+          { x: bounds.x + bounds.size / 2, y: bounds.y + bounds.size / 2 },
+          innerEdgeRadius,
+          seed
+        );
+      })()
+      : null;
+    const apseInterior = meta.sectorType === SECTOR_TYPES.APSE
+      ? (() => {
+        if (!apseRing) {
+          return null;
+        }
+        const ringRadius = apseRing.radius;
+        const ringThickness = apseRing.ringThickness ?? (bounds.size * (APSE.RING_THICKNESS_RATIO ?? 0.06));
+        const innerRatio = APSE.INTERIOR?.INNER_RADIUS_RATIO ?? 0.28;
+        const outerInsetRatio = APSE.INTERIOR?.OUTER_INSET_RATIO ?? 0.55;
+        const innerRadius = ringRadius * innerRatio;
+        const outerRadius = ringRadius - ringThickness * outerInsetRatio;
+        const outerWallOuterRadius = ringRadius + ringThickness / 2;
+        const rng = createRng(this.getSectorSeed(sx, sy, SEED_SALT.SPECIAL + 4));
+        const openings = apseRing.getOpenings ? apseRing.getOpenings() : [];
+        const interior = generateApseInterior(
+          { x: bounds.x + bounds.size / 2, y: bounds.y + bounds.size / 2 },
+          outerRadius,
+          innerRadius,
+          openings,
+          ringThickness,
+          rng,
+          { bandCount: APSE.INTERIOR?.BAND_COUNT, outerWallOuterRadius }
+        );
+        if (interior) {
+          interior.metalTexture = apseMetalTexture;
+        }
+        return interior;
+      })()
+      : null;
     const asteroidMultiplier = zone.asteroidMultiplier * spawnProfile.asteroids;
     const asteroidRng = createRng(this.getSectorSeed(sx, sy, SEED_SALT.ASTEROIDS));
     const asteroidOptions = {
@@ -1114,7 +1726,7 @@ export class SectorManager {
       asteroidOptions
     );
 
-    const sector = {
+      const sector = {
       sx,
       sy,
       bounds,
@@ -1134,10 +1746,16 @@ export class SectorManager {
         y: meta.beaconPosition?.y ?? bounds.y + bounds.size / 2,
         radius: 900
       } : null,
-      station,
-      stars,
-      goal,
-      endZone,
+        station,
+        stars,
+        palimpsestSingularity,
+        palimpsestFragments,
+        goal,
+        meridian,
+        apseRing,
+        apseBackground,
+        apseInterior,
+      apseRingThickness: apseRing?.ringThickness ?? null,
       asteroids,
       goalCollected: meta.surveyComplete ? true : false,
       goalDelivered: meta.surveyComplete ? true : false

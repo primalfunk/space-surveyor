@@ -1,8 +1,6 @@
 import { CONFIG } from "./config.js";
 
 const GAME_STATE_KEY = CONFIG.STORAGE.GAME_STATE_KEY;
-const { UPGRADES } = CONFIG;
-
 function generateSeed() {
   return Math.floor(Math.random() * 0xffffffff);
 }
@@ -15,11 +13,8 @@ function clampNumber(value, fallback = 0) {
   return Number.isFinite(value) ? value : fallback;
 }
 
-function clampLevel(value, maxLevel) {
-  if (!Number.isFinite(maxLevel)) {
-    return Math.max(0, Math.floor(clampNumber(value, 0)));
-  }
-  return Math.max(0, Math.min(maxLevel, Math.floor(clampNumber(value, 0))));
+function clampLevel(value) {
+  return Math.max(0, Math.floor(clampNumber(value, 0)));
 }
 
 function ensureArray(value) {
@@ -42,10 +37,17 @@ export function createDefaultGameState(seed = generateSeed()) {
       recentBeaconVisits: []
     },
     resourceCurrency: 0,
+    clues: {
+      totalCollected: 0,
+      collectedIds: [],
+      selectedVariants: {}
+    },
     upgrades: {
       fireRateLevel: 0,
+      fireDistanceLevel: 0,
       hullLevel: 0,
-      collectorLevel: 0
+      collectorLevel: 0,
+      fuelTankLevel: 0
     },
     furthestRing: 0,
     newSectorCount: 0,
@@ -63,6 +65,7 @@ export function normalizeGameState(raw) {
   );
   const beaconRaw = isPlainObject(raw.beacon) ? raw.beacon : {};
   const historyRaw = isPlainObject(raw.history) ? raw.history : {};
+  const clueRaw = isPlainObject(raw.clues) ? raw.clues : {};
 
   base.worldSeed = Number.isFinite(raw.worldSeed) ? raw.worldSeed : base.worldSeed;
   if (Number.isFinite(raw.worldAgeMs)) {
@@ -80,10 +83,15 @@ export function normalizeGameState(raw) {
   base.history.recentBeaconVisits = ensureArray(historyRaw.recentBeaconVisits);
 
   base.resourceCurrency = Math.max(0, Math.floor(clampNumber(raw.resourceCurrency, 0)));
+  base.clues.totalCollected = Math.max(0, Math.floor(clampNumber(clueRaw.totalCollected, 0)));
+  base.clues.collectedIds = ensureArray(clueRaw.collectedIds).filter((id) => Number.isFinite(id));
+  base.clues.selectedVariants = isPlainObject(clueRaw.selectedVariants) ? clueRaw.selectedVariants : {};
   if (isPlainObject(raw.upgrades)) {
-    base.upgrades.fireRateLevel = clampLevel(raw.upgrades.fireRateLevel, UPGRADES.FIRE_RATE.levelMax);
-    base.upgrades.hullLevel = clampLevel(raw.upgrades.hullLevel, UPGRADES.HULL.levelMax);
-    base.upgrades.collectorLevel = clampLevel(raw.upgrades.collectorLevel, UPGRADES.COLLECTOR.levelMax);
+    base.upgrades.fireRateLevel = clampLevel(raw.upgrades.fireRateLevel);
+    base.upgrades.fireDistanceLevel = clampLevel(raw.upgrades.fireDistanceLevel);
+    base.upgrades.hullLevel = clampLevel(raw.upgrades.hullLevel);
+    base.upgrades.collectorLevel = clampLevel(raw.upgrades.collectorLevel);
+    base.upgrades.fuelTankLevel = clampLevel(raw.upgrades.fuelTankLevel);
   }
 
   base.furthestRing = Math.max(0, Math.floor(clampNumber(raw.furthestRing, 0)));

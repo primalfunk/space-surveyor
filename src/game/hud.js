@@ -134,7 +134,7 @@ function drawStatIcon(ctx, type, x, y, size, color, glow) {
   ctx.restore();
 }
 
-export function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, stations, screenW, screenH, isCompact, anomalyEffects = null, highlights = null) {
+export function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings, stations, fuelPickups, resourcePickups, screenW, screenH, isCompact, anomalyEffects = null, highlights = null) {
   if (!activeSectors || activeSectors.length === 0) {
     return;
   }
@@ -144,13 +144,19 @@ export function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings
   const desiredSize = isCompact
     ? Math.min(MINIMAP.SIZE, Math.round(base * 0.28))
     : MINIMAP.SIZE;
-  const size = Math.max(120, Math.min(desiredSize, maxSize));
+  let size = Math.max(120, Math.min(desiredSize, maxSize));
+  size = Math.min(maxSize, size * 1.1);
   const range = MINIMAP.RANGE * (anomalyEffects?.rangeScale ?? 1);
 
-  const x0 = screenW - size - edge;
+  const offsetX = 30;
+  const x0 = Math.max(edge, screenW - size - edge - offsetX);
   const y0 = edge;
   const cx = x0 + size / 2;
   const cy = y0 + size / 2;
+  const radarRadius = size * 0.46;
+  const sweepSpeed = MINIMAP.SWEEP_SPEED ?? 0.0014;
+  const sweepWidth = MINIMAP.SWEEP_WIDTH ?? (Math.PI / 12);
+  const sweepAngle = (performance.now() * sweepSpeed) % (Math.PI * 2);
   const goalHighlight = highlights?.goal ?? 0;
   const exitHighlight = highlights?.exit ?? 0;
   const pulse = 0.6 + 0.4 * Math.sin(performance.now() * 0.006);
@@ -167,14 +173,33 @@ export function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings
   });
   drawHudTick(ctx, x0, y0 + 8, size);
 
+  // radar background
+  const radarGrad = ctx.createRadialGradient(cx, cy, radarRadius * 0.1, cx, cy, radarRadius);
+  radarGrad.addColorStop(0, "rgba(12, 18, 22, 0.85)");
+  radarGrad.addColorStop(1, HUD_COLORS.MAP_BG);
+  ctx.fillStyle = radarGrad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radarRadius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(120, 170, 180, 0.25)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radarRadius, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, radarRadius, 0, Math.PI * 2);
+  ctx.clip();
+
   // completed sector background tint
   for (const sector of activeSectors) {
     if (!sector.goalDelivered) {
       continue;
     }
-    const bx0 = cx + ((sector.bounds.x - ship.x) / range) * (size / 2);
-    const by0 = cy + ((sector.bounds.y - ship.y) / range) * (size / 2);
-    const bSize = (sector.bounds.size / range) * (size / 2);
+    const bx0 = cx + ((sector.bounds.x - ship.x) / range) * radarRadius;
+    const by0 = cy + ((sector.bounds.y - ship.y) / range) * radarRadius;
+    const bSize = (sector.bounds.size / range) * radarRadius;
     ctx.fillStyle = HUD_COLORS.MAP_COMPLETE;
     ctx.fillRect(bx0, by0, bSize, bSize);
   }
@@ -185,17 +210,47 @@ export function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings
   ctx.arc(cx, cy, 3, 0, Math.PI * 2);
   ctx.fill();
 
+  const sweepGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radarRadius);
+  sweepGrad.addColorStop(0, "rgba(120, 200, 190, 0.25)");
+  sweepGrad.addColorStop(1, "rgba(120, 200, 190, 0)");
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.fillStyle = sweepGrad;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.arc(cx, cy, radarRadius, sweepAngle - sweepWidth, sweepAngle + sweepWidth);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  const sweepIntensity = (mx, my) => {
+    const dx = mx - cx;
+    const dy = my - cy;
+    const angle = Math.atan2(dy, dx);
+    const delta = Math.abs(normalizeAngle(angle - sweepAngle));
+    if (delta > sweepWidth) {
+      return 0;
+    }
+    const edge = 1 - delta / sweepWidth;
+    const dist = Math.hypot(dx, dy);
+    const distFade = 0.35 + 0.65 * (1 - Math.min(1, dist / radarRadius));
+    return Math.pow(edge, 1.7) * distFade;
+  };
+
   // enemy spawn pings
   if (enemyPings && enemyPings.length > 0) {
     for (const ping of enemyPings) {
       const dx = ping.x - ship.x;
       const dy = ping.y - ship.y;
-      if (Math.abs(dx) > range || Math.abs(dy) > range) continue;
-      const mx = cx + (dx / range) * (size / 2);
-      const my = cy + (dy / range) * (size / 2);
+      const dist = Math.hypot(dx, dy);
+      if (dist > range) continue;
+      const mx = cx + (dx / range) * radarRadius;
+      const my = cy + (dy / range) * radarRadius;
+      const intensity = sweepIntensity(mx, my);
+      if (intensity <= 0.01) continue;
       const t = 1 - (ping.life / ping.maxLife);
       const radius = 4 + t * 10;
-      ctx.strokeStyle = `rgba(200, 110, 110, ${0.6 * (1 - t)})`;
+      ctx.strokeStyle = `rgba(200, 110, 110, ${0.6 * (1 - t) * intensity})`;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.arc(mx, my, radius, 0, Math.PI * 2);
@@ -208,11 +263,13 @@ export function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings
     for (const star of sector.stars) {
       const dx = star.x - ship.x;
       const dy = star.y - ship.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > range) continue;
 
-      if (Math.abs(dx) > range || Math.abs(dy) > range) continue;
-
-      const mx = cx + (dx / range) * (size / 2);
-      const my = cy + (dy / range) * (size / 2);
+      const mx = cx + (dx / range) * radarRadius;
+      const my = cy + (dy / range) * radarRadius;
+      const intensity = sweepIntensity(mx, my);
+      if (intensity <= 0.01) continue;
 
       ctx.fillStyle = star.minimapColor ?? "gold";
       ctx.beginPath();
@@ -224,15 +281,19 @@ export function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings
     for (const asteroid of sector.asteroids) {
       const dx = asteroid.x - ship.x;
       const dy = asteroid.y - ship.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > range) continue;
 
-      if (Math.abs(dx) > range || Math.abs(dy) > range) continue;
+      const mx = cx + (dx / range) * radarRadius;
+      const my = cy + (dy / range) * radarRadius;
+      const intensity = sweepIntensity(mx, my);
+      if (intensity <= 0.01) continue;
 
-      const mx = cx + (dx / range) * (size / 2);
-      const my = cy + (dy / range) * (size / 2);
-
+      ctx.globalAlpha = intensity;
       ctx.beginPath();
       ctx.arc(mx, my, 2.5, 0, Math.PI * 2);
       ctx.fill();
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -241,12 +302,16 @@ export function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings
     for (const station of stations) {
       const dx = station.x - ship.x;
       const dy = station.y - ship.y;
-      if (Math.abs(dx) > range || Math.abs(dy) > range) {
+      const dist = Math.hypot(dx, dy);
+      if (dist > range) {
         continue;
       }
-      const mx = cx + (dx / range) * (size / 2);
-      const my = cy + (dy / range) * (size / 2);
+      const mx = cx + (dx / range) * radarRadius;
+      const my = cy + (dy / range) * radarRadius;
+      const intensity = sweepIntensity(mx, my);
+      if (intensity <= 0.01) continue;
       ctx.save();
+      ctx.globalAlpha = intensity;
       ctx.fillStyle = "rgba(120, 220, 180, 0.95)";
       ctx.strokeStyle = "rgba(200, 255, 230, 0.9)";
       ctx.lineWidth = 1.5;
@@ -262,16 +327,53 @@ export function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings
     }
   }
 
+  // pickups
+  if (Array.isArray(fuelPickups)) {
+    for (const pickup of fuelPickups) {
+      const dx = pickup.x - ship.x;
+      const dy = pickup.y - ship.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > range) continue;
+      const mx = cx + (dx / range) * radarRadius;
+      const my = cy + (dy / range) * radarRadius;
+      const intensity = sweepIntensity(mx, my);
+      if (intensity <= 0.01) continue;
+      ctx.fillStyle = `rgba(255, 235, 120, ${0.95 * intensity})`;
+      ctx.beginPath();
+      ctx.arc(mx, my, 2.5 + intensity * 0.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  if (Array.isArray(resourcePickups)) {
+    for (const pickup of resourcePickups) {
+      const dx = pickup.x - ship.x;
+      const dy = pickup.y - ship.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > range) continue;
+      const mx = cx + (dx / range) * radarRadius;
+      const my = cy + (dy / range) * radarRadius;
+      const intensity = sweepIntensity(mx, my);
+      if (intensity <= 0.01) continue;
+      ctx.fillStyle = `rgba(255, 225, 80, ${0.9 * intensity})`;
+      ctx.beginPath();
+      ctx.arc(mx, my, 2.2 + intensity * 0.7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
   // enemies
   if (enemiesInRange && enemiesInRange.length > 0) {
     for (const enemy of enemiesInRange) {
       const dx = enemy.x - ship.x;
       const dy = enemy.y - ship.y;
-      if (Math.abs(dx) > range || Math.abs(dy) > range) continue;
-      const mx = cx + (dx / range) * (size / 2);
-      const my = cy + (dy / range) * (size / 2);
+      const dist = Math.hypot(dx, dy);
+      if (dist > range) continue;
+      const mx = cx + (dx / range) * radarRadius;
+      const my = cy + (dy / range) * radarRadius;
+      const intensity = sweepIntensity(mx, my);
+      if (intensity <= 0.01) continue;
       const pulse = 0.5 + Math.abs(Math.sin(performance.now() / 250));
-      ctx.fillStyle = `rgba(200, 110, 110, ${0.4 + pulse * 0.45})`;
+      ctx.fillStyle = `rgba(200, 110, 110, ${(0.4 + pulse * 0.45) * intensity})`;
       ctx.beginPath();
       ctx.arc(mx, my, 2.5 + pulse, 0, Math.PI * 2);
       ctx.fill();
@@ -280,38 +382,26 @@ export function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings
 
   // end zones + goal pickups
   for (const sector of activeSectors) {
-    const { goal, endZone, goalCollected, goalDelivered } = sector;
-    if (!goalDelivered) {
-      const zdx = endZone.x + endZone.width / 2 - ship.x;
-      const zdy = endZone.y + endZone.height / 2 - ship.y;
-      if (Math.abs(zdx) <= range && Math.abs(zdy) <= range) {
-        const zx = cx + (zdx / range) * (size / 2);
-        const zy = cy + (zdy / range) * (size / 2);
-        ctx.strokeStyle = "rgba(120, 200, 190, 0.8)";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(zx - 5, zy - 5, 10, 10);
-        if (exitHighlight > 0) {
-          const alpha = Math.min(1, exitHighlight) * (0.35 + 0.35 * pulse);
-          ctx.strokeStyle = `rgba(160, 230, 220, ${alpha})`;
-          ctx.lineWidth = 2.5;
-          ctx.strokeRect(zx - 8, zy - 8, 16, 16);
-        }
-      }
-    }
-
-    if (!goalCollected) {
+    const { goal, goalDelivered } = sector;
+    if (!goalDelivered && goal) {
       const gdx = goal.x + goal.width / 2 - ship.x;
       const gdy = goal.y + goal.height / 2 - ship.y;
-      if (Math.abs(gdx) <= range && Math.abs(gdy) <= range) {
-        const gx = cx + (gdx / range) * (size / 2);
-        const gy = cy + (gdy / range) * (size / 2);
-        ctx.fillStyle = "rgba(120, 200, 190, 0.9)";
+      const dist = Math.hypot(gdx, gdy);
+      if (dist <= range) {
+        const gx = cx + (gdx / range) * radarRadius;
+        const gy = cy + (gdy / range) * radarRadius;
+        const intensity = sweepIntensity(gx, gy);
+        if (intensity <= 0.01) {
+          continue;
+        }
+        ctx.fillStyle = `rgba(120, 200, 190, ${0.9 * intensity})`;
         ctx.beginPath();
         ctx.arc(gx, gy, 3, 0, Math.PI * 2);
         ctx.fill();
-        if (goalHighlight > 0) {
-          const alpha = Math.min(1, goalHighlight) * (0.35 + 0.35 * pulse);
-          ctx.strokeStyle = `rgba(160, 230, 220, ${alpha})`;
+        const highlight = Math.max(goalHighlight, exitHighlight);
+        if (highlight > 0) {
+          const alpha = Math.min(1, highlight) * (0.35 + 0.35 * pulse);
+          ctx.strokeStyle = `rgba(160, 230, 220, ${alpha * intensity})`;
           ctx.lineWidth = 2;
           ctx.beginPath();
           ctx.arc(gx, gy, 6 + 2 * pulse, 0, Math.PI * 2);
@@ -322,26 +412,27 @@ export function drawMiniMap(ctx, ship, activeSectors, enemiesInRange, enemyPings
   }
 
   ctx.restore();
+  ctx.restore();
 }
 
 function getNearestScanTarget(ship, activeSectors) {
   let nearest = null;
   let fallback = null;
   for (const sector of activeSectors) {
-    if (!sector.endZone) {
+    if (!sector.goal) {
       continue;
     }
-    const ex = sector.endZone.x + sector.endZone.width / 2;
-    const ey = sector.endZone.y + sector.endZone.height / 2;
-    const dx = ex - ship.x;
-    const dy = ey - ship.y;
+    const gx = sector.goal.x + sector.goal.width / 2;
+    const gy = sector.goal.y + sector.goal.height / 2;
+    const dx = gx - ship.x;
+    const dy = gy - ship.y;
     const dist2 = dx * dx + dy * dy;
     if (!sector.goalDelivered) {
       if (!nearest || dist2 < nearest.dist2) {
-        nearest = { x: ex, y: ey, dist2 };
+        nearest = { x: gx, y: gy, dist2 };
       }
     } else if (!fallback || dist2 < fallback.dist2) {
-      fallback = { x: ex, y: ey, dist2 };
+      fallback = { x: gx, y: gy, dist2 };
     }
   }
   return nearest ?? fallback;
@@ -383,12 +474,12 @@ export function drawBearingIndicators(ctx, ship, activeSectors, fuelPickups, ene
   const scanTargets = [];
   const fallbackTargets = [];
   for (const sector of activeSectors) {
-    if (sector.endZone) {
-      const ex = sector.endZone.x + sector.endZone.width / 2;
-      const ey = sector.endZone.y + sector.endZone.height / 2;
-      const dx = ex - ship.x;
-      const dy = ey - ship.y;
-      const entry = { x: ex, y: ey, dist2: dx * dx + dy * dy };
+    if (sector.goal) {
+      const gx = sector.goal.x + sector.goal.width / 2;
+      const gy = sector.goal.y + sector.goal.height / 2;
+      const dx = gx - ship.x;
+      const dy = gy - ship.y;
+      const entry = { x: gx, y: gy, dist2: dx * dx + dy * dy };
       if (sector.goalDelivered) {
         fallbackTargets.push(entry);
       } else {
@@ -1124,11 +1215,11 @@ export function drawCompassHud(ctx, ship, activeSectors, enemies, fuelPickups, s
   }
 
   for (const sector of activeSectors) {
-    if (!sector.goalDelivered && sector.endZone) {
-      const endZone = sector.endZone;
-      const ex = endZone.x + endZone.width / 2;
-      const ey = endZone.y + endZone.height / 2;
-      drawMark(ex, ey, laneEnd, 0.95, drawEndZoneMark);
+    if (!sector.goalDelivered && sector.goal) {
+      const goal = sector.goal;
+      const gx = goal.x + goal.width / 2;
+      const gy = goal.y + goal.height / 2;
+      drawMark(gx, gy, laneEnd, 0.95, drawEndZoneMark);
     }
   }
 
@@ -1179,17 +1270,36 @@ export function drawAlerts(ctx, alerts, alertClock, screenW, screenH) {
 
   ctx.save();
   ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-  const fontSize = 18;
+  const fontSize = Number.isFinite(active.fontSize) ? active.fontSize : 18;
+  const lineHeight = fontSize * 1.25;
   ctx.font = `${fontSize}px ${HUD_FONT}`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   const x = screenW * 0.5;
   const y = screenH * 0.5;
-  const metrics = ctx.measureText(active.text);
-  const textWidth = metrics.width;
-  const textHeight = fontSize * 1.2;
+  const lines = String(active.text ?? "").split("\n");
+  let textWidth = 0;
+  for (const line of lines) {
+    const metrics = ctx.measureText(line);
+    textWidth = Math.max(textWidth, metrics.width);
+  }
+  const textHeight = lineHeight * Math.max(1, lines.length);
   const time = performance.now();
   const pulse = 0.6 + 0.4 * Math.sin(time * 0.004);
+  const firstLineY = y - (textHeight - lineHeight) / 2;
+
+  if (active.background) {
+    const paddingX = fontSize * 0.9;
+    const paddingY = fontSize * 0.6;
+    const left = x - textWidth / 2 - paddingX;
+    const top = y - textHeight / 2 - paddingY;
+    const width = textWidth + paddingX * 2;
+    const height = textHeight + paddingY * 2;
+    ctx.save();
+    ctx.fillStyle = "rgba(10, 14, 20, 0.55)";
+    ctx.fillRect(left, top, width, height);
+    ctx.restore();
+  }
 
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
@@ -1212,23 +1322,29 @@ export function drawAlerts(ctx, alerts, alertClock, screenW, screenH) {
 
   ctx.lineWidth = 2;
   ctx.strokeStyle = HUD_COLORS.ALERT_STROKE;
-  ctx.fillStyle = HUD_COLORS.PANEL_TEXT;
-  ctx.strokeText(active.text, x, y);
-  ctx.fillText(active.text, x, y);
+  ctx.fillStyle = active.textColor ?? HUD_COLORS.PANEL_TEXT;
+  for (let i = 0; i < lines.length; i++) {
+    const lineY = firstLineY + i * lineHeight;
+    ctx.strokeText(lines[i], x, lineY);
+    ctx.fillText(lines[i], x, lineY);
+  }
 
   ctx.save();
   ctx.globalAlpha *= 0.35;
   ctx.globalCompositeOperation = "lighter";
   ctx.fillStyle = HUD_COLORS.ACCENT_SOFT;
   const jitter = Math.sin(time * 0.02 + elapsed * 6) * 1.5;
-  ctx.fillText(active.text, x + jitter, y);
+  for (let i = 0; i < lines.length; i++) {
+    const lineY = firstLineY + i * lineHeight;
+    ctx.fillText(lines[i], x + jitter, lineY);
+  }
   ctx.restore();
 
   ctx.save();
   ctx.globalCompositeOperation = "source-atop";
   ctx.globalAlpha *= 0.25 + pulse * 0.12;
   const left = x - textWidth / 2 - 6;
-  const top = y - textHeight;
+  const top = y - textHeight / 2 - 6;
   const width = textWidth + 12;
   const scanGap = 6;
   ctx.fillStyle = "rgba(255, 255, 255, 0.25)";

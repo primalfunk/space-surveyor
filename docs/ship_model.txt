@@ -1,0 +1,82 @@
+LOOSE REPRESENTATION IN ASCII OF THE SHIP
+                     
+                     ▲  Forward / +Y
+                     │
+               ┌───────────────────┐
+               │    SENSOR NOSE     │
+               │  (Perception Arc)  │
+               └───────┬───┬───────┘
+                       │   │
+            ┌──────────┘   └──────────┐
+            │   NAVIGATION SPINE       │
+            │  (Vector / Alignment)    │
+            │                          │
+            │     ┌────────────┐       │
+            │     │  POWER CORE │       │
+            │     │ (Resonance) │       │
+            │     └────────────┘       │
+            │                          │
+            │  STRUCTURAL FRAME LINES  │
+            │ (Hull / Integrity Paths) │
+            │                          │
+            └───────┬──────────┬───────┘
+                    │          │
+              ┌─────┘          └─────┐
+              │   PROPULSION BAYS     │
+              │  (Flow / Inertia)     │
+              └──────────┬───────────┘
+                         │
+                    EXHAUST PLANE
+                         │
+                         ▼  Aft / −Y
+
+SHIP UPGRADE VISUALIZATION SPEC (V0)
+
+Base:
+- Ship uses a fixed top-down sprite silhouette.
+- All upgrades are represented as interior lighting or line overlays.
+- No geometry changes per upgrade.
+
+UPGRADES
+
+1. SHIELD
+- Internal: single light node near power core.
+- Light color encodes max shield tier.
+- Light brightness encodes current shield HP.
+- External: circular aura around ship.
+- Aura invisible at level 0.
+- Aura color matches internal light.
+- Aura opacity proportional to current HP.
+
+2. FIRE RATE
+- Interior region: forward emitter chamber.
+- Visual: radial ticks/bars.
+- Number of ticks = fire rate level.
+- Ticks pulse continuously at firing cadence.
+- Animation runs even when not firing.
+
+3. FIRE DISTANCE
+- Interior region: central forward axis.
+- Visual: thin axial line extending forward.
+- Length increases with level.
+- Higher levels add segmentation or secondary ghost line.
+- No pulsing; steady presence.
+
+4. FUEL TANK
+- Interior region: aft central chamber.
+- Visual: vertical fill bar or stacked cells.
+- Max height scales with fuel tank level.
+- Fill amount reflects current fuel.
+- Depletes during thrust, refills when idle.
+
+5. COLLECTOR
+- Interior region: left/right lateral channels.
+- Visual: inward-facing chevrons.
+- Number of chevrons = collector level.
+- Higher levels animate chevrons inward.
+- Optional faint external pickup radius at high levels.
+
+GENERAL
+- All indicators use stroke + alpha, minimal fill.
+- Colors are muted at low levels, clearer at high levels.
+- Indicators should be readable at small on-screen size.

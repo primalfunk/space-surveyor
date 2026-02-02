@@ -10,13 +10,14 @@ const STORAGE = {
 
 // Debug toggles for development.
 const DEBUG = {
-  VECTORS: true
+  VECTORS: true,
+  APSE_COLLISION: false
 };
 
 // Camera controls and screen shake.
 const CAMERA = {
   ZOOM: {
-    MIN: 0.4,
+    MIN: 0.25,
     MAX: 2.0,
     SPEED: 0.7,
     WHEEL_STEP: 0.12
@@ -37,10 +38,10 @@ const GAMEPLAY = {
   GAME_OVER_DELAY: 0.7,
   RESPAWN_DELAY: 0.6,
   INTRO: {
-    ALERT_DURATION: 3,
-    START_DELAY: 1.2,
+    ALERT_DURATION: 4,
+    START_DELAY: 0.5,
     SCORE_TIMEOUT: 10,
-    FUEL_RATIO: 0.8,
+    FUEL_RATIO: 0.7,
     LONGRUN_TRANSITIONS: 2,
     STAR_PULL_ACCEL: 60,
     HIGHLIGHT_DURATION: 1.4,
@@ -51,7 +52,7 @@ const GAMEPLAY = {
 
 // Scoring values and popup styling.
 const SCORE = {
-  CHUNK_MULTIPLIER: 0.5,
+  CHUNK_MULTIPLIER: 0.6,
   POINTS: {
     ASTEROID: 5,
     ENEMY: 25,
@@ -80,47 +81,126 @@ const SCORE = {
 
 // Resource pickups dropped by asteroids.
 const RESOURCE = {
-  DROP_CHANCE: 0.5,
-  DROP_BASE_VALUE: 8,
-  CHILD_VALUE_DECAY: 0.6,
+  DROP_CHANCE: 0.75,
+  DROP_BASE_VALUE: 10,
+  CHILD_VALUE_DECAY: 5,
   MIN_DROP_VALUE: 1,
   PICKUP_RADIUS: 18,
-  SPRITE_SRC: "assets/ui/sprites/money.png",
+  SPRITE_SRC: "assets/ui/sprites/crystal.png",
   HUD_ICON_SIZE: 14,
-  TTL_MS: 30000
+  TTL_MS: 30000,
+  RARITY_TIERS: 24,
+  DROP_SKEW_EXPONENT: 4.5,
+  VALUE_BASE: 1.18,
+  LEGENDARY_THRESHOLD: 17,
+  MYTHIC_INDEX: 23,
+  LOW_TIER_REMAP: {
+    0: 1,
+    1: 2,
+    2: 2,
+    3: 3
+  },
+  VISUAL: {
+    HL_THRESH_LOW: 0.65,
+    HL_THRESH_HIGH: 0.9,
+    CORE_BRIGHT_MULT: 1.25,
+    CORE_ADD: 0.05,
+    BASE_TINT_ALPHA: 0.7,
+    CORE_TINT_ALPHA: 0.75,
+    ROT_FREQ: 1.1,
+    ROT_AMP: 0.1,
+    BOB_FREQ: 1.6,
+    BOB_AMP: 2.0,
+    HALO_PULSE_FREQ: 0.8,
+    HALO_ALPHA_LEGENDARY: 0.2,
+    HALO_ALPHA_MYTHIC: 0.3,
+    HALO_SCALE_LEGENDARY: 1.35,
+    HALO_SCALE_MYTHIC: 1.55,
+    SHADOW_ALPHA: 0.18,
+    SHADOW_SCALE: 1.3
+  },
+  COLOR_ANCHORS: [
+    { index: 0, hue: 0, sat: 0.0, val: 0.6 },
+    { index: 5, hue: 120, sat: 0.6, val: 0.7 },
+    { index: 9, hue: 210, sat: 0.7, val: 0.8 },
+    { index: 13, hue: 270, sat: 0.75, val: 0.85 },
+    { index: 17, hue: 45, sat: 0.8, val: 0.9 },
+    { index: 23, hue: 0, sat: 0.9, val: 1.0 }
+  ]
 };
 
 // Upgrade economy and effects.
 const UPGRADES = {
   FIRE_RATE: {
-    levelMax: 10,
     baseCost: 30,
-    costMult: 1.45,
+    costGrowth: 1.45,
     effect: {
       cooldownMsBase: 260,
-      cooldownMsMin: 90
+      cooldownMsMin: 90,
+      model: {
+        effectStep: 5,
+        curveK: 0.1
+      }
+    }
+  },
+  FIRE_DISTANCE: {
+    baseCost: 34,
+    costGrowth: 1.45,
+    effect: {
+      multiplierBase: 0.5,
+      multiplierMax: 2.0,
+      model: {
+        effectStep: 0.05,
+        curveK: 0.12
+      }
     }
   },
   HULL: {
-    levelMax: 10,
     baseCost: 25,
-    costMult: 1.42,
+    costGrowth: 1.42,
     effect: {
       maxLivesBase: GAMEPLAY.STARTING_LIVES,
-      livesPerLevel: 1
+      extraLivesModel: {
+        maxEffect: 10,
+        effectStep: 1,
+        curveK: 0.1
+      }
     }
   },
   COLLECTOR: {
-    levelMax: 10,
     baseCost: 20,
-    costMult: 1.4,
+    costGrowth: 1.4,
     effect: {
       radiusBase: 0,
-      radiusPerLevel: 28,
       pullStrengthBase: 0,
-      pullStrengthPerLevel: 0.015,
       pullStrengthMax: 0.2
+    },
+    models: {
+      radius: {
+        maxEffect: 280,
+        effectStep: 2,
+        curveK: 0.1
+      },
+      pullStrength: {
+        maxEffect: 0.2,
+        effectStep: 0.002,
+        curveK: 0.075
+      }
     }
+  },
+  FUEL_TANK: {
+    baseCost: 100,
+    costGrowth: 1.5,
+    effect: {
+      extraCapacityModel: {
+        maxEffect: 1000,
+        effectStep: 10,
+        curveK: 0.1
+      }
+    }
+  },
+  REFUEL: {
+    costPerFuel: 0.2
   },
   REPAIR: {
     baseCost: 12,
@@ -429,7 +509,9 @@ const HUD = {
   },
   MINIMAP: {
     SIZE: 200,
-    RANGE: 3000
+    RANGE: 3000,
+    SWEEP_SPEED: 0.0014,
+    SWEEP_WIDTH: Math.PI / 12
   },
   COMPASS: {
     WIDTH: 320,
@@ -484,6 +566,20 @@ const UI = {
   }
 };
 
+// Narrative clue display tuning.
+const CLUES = {
+  SPEAKER_COLORS: {
+    Harmon: "#D6B36A",
+    Ezra: "#6FA9A5",
+    Clara: "#C8C8C2",
+    Marcus: "#5e748a",
+    Noah: "#8A4A4A",
+    Miriam: "#9A8FB3"
+  },
+  TUTORIAL_COLOR: "#FFFFFF",
+  ALERT_DURATION: 8
+};
+
 // Physics constants.
 const PHYSICS = {
   GRAVITY_G: 4000,
@@ -506,7 +602,7 @@ const SHIP = {
   MAX_FUEL: 400,
   THRUST_FUEL_RATE: 18,
   ROT_FUEL_RATE: 0,
-  DRAW_SIZE: 24,
+  DRAW_SIZE: 36,
   COLLISION_RADIUS: 12,
   SPRITE_SRC: "assets/ui/sprites/ship.png",
   THRUST_LOOP_SEGMENT: 0.4,
@@ -555,7 +651,7 @@ const PICKUPS = {
     WIDTH: 12,
     HEIGHT: 24,
     RADIUS: 14,
-    DROP_CHANCE: 1 / 4,
+    DROP_CHANCE: 1 / 5,
     TTL_MS: 30000,
     ROT_SPEED_MIN: 0.5,
     ROT_SPEED_MAX: 1.1,
@@ -583,17 +679,23 @@ const BEACON_RELIC = {
   SHIMMER_SPEED: 0.35
 };
 
-// Goal / survey target tuning.
+// Lore point / survey target tuning.
 const GOAL = {
-  SPRITE_SRC: "assets/ui/sprites/fuel.png",
-  WIDTH: 12,
-  HEIGHT: 24,
+  SPRITE_SRC: "assets/ui/sprites/page.png",
+  WIDTH: 18,
+  HEIGHT: 36,
   MARGIN: 300,
   MIN_SHIP_DIST: 900,
   MIN_STAR_DIST: 300,
-  ROT_SPEED_MIN: 0.4,
-  ROT_SPEED_MAX: 1.0,
-  ANCHOR_RADIUS_DEFAULT: 480
+  ROT_SPEED_MIN: 0.28,
+  ROT_SPEED_MAX: 0.7,
+  ANCHOR_RADIUS_DEFAULT: 480,
+  GLOW_COLOR: "rgba(120, 200, 255, 0.85)",
+  GLOW_ALPHA: 0.85,
+  GLOW_BLUR: 18,
+  GLOW_SCALE: 1.25,
+  GLOW_PULSE_SPEED: 0.006,
+  GLOW_PULSE_AMOUNT: 0.08
 };
 
 // End zone visuals and sizing.
@@ -620,15 +722,15 @@ const ASTEROID = {
     MAX_PER_SECTOR: 60
   },
   GENERATION: {
-    COUNT: 12,
+    COUNT: 30,
     SPEED_MIN: 5,
-    SPEED_MAX: 120,
+    SPEED_MAX: 60,
     RADIUS_MIN: 10,
-    RADIUS_MAX: 44,
-    SPAWN_MARGIN: 400,
+    RADIUS_MAX: 33,
+    SPAWN_MARGIN: 200,
     CLUSTER: {
       COUNT_MIN: 2,
-      COUNT_MAX: 4,
+      COUNT_MAX: 3,
       RADIUS_MIN: 220,
       RADIUS_MAX: 520
     }
@@ -712,6 +814,16 @@ const STAR = {
         spriteKey: "blue",
         wellMultiplier: 1.69,
         massMultiplier: 4.0
+      },
+      singularity: {
+        id: "singularity",
+        bodyColor: "rgb(12, 12, 18)",
+        wellFill: "rgba(20, 22, 30, 0.18)",
+        wellStroke: "rgba(80, 90, 120, 0.22)",
+        minimapColor: "rgb(80, 90, 120)",
+        spriteKey: "singularity",
+        wellMultiplier: 2.8,
+        massMultiplier: 6.5
       }
     },
     RATE_MULTIPLIER: 3,
@@ -760,7 +872,7 @@ const RIVER = {
   MIN_PER_SECTOR: 2,
   PER_SECTOR_MAX: 2,
   CHANNEL_SECTOR_BIAS: 0.65,
-  DISABLED_SECTOR_TYPES: ["SIGNAL_ORIGIN"],
+  DISABLED_SECTOR_TYPES: ["SIGNAL_ORIGIN", "MERIDIAN"],
   POLYLINE_SPACING: 120,
   BACKBONE_SPAN_CELLS: 3,
   DRIFT_AMPLITUDE: 3.6,
@@ -818,14 +930,18 @@ const SECTOR = {
   MIN_ORIGIN_RING: 8,
   ORIGIN_COOLDOWN: 11,
   ECHO_MIN_EXPOSURE: 0.2,
-  TYPES: {
-    GENERIC: "GENERIC",
-    DEAD_QUIET: "DEAD_QUIET",
-    ECHO: "ECHO",
-    ANOMALY: "ANOMALY",
-    DERELICT_FIELD: "DERELICT_FIELD",
-    SIGNAL_ORIGIN: "SIGNAL_ORIGIN"
-  },
+    TYPES: {
+      GENERIC: "GENERIC",
+      DEAD_QUIET: "DEAD_QUIET",
+      ECHO: "ECHO",
+      ANOMALY: "ANOMALY",
+      DERELICT_FIELD: "DERELICT_FIELD",
+      SIGNAL_ORIGIN: "SIGNAL_ORIGIN",
+      APSE: "APSE",
+      QUIET_REACH: "QUIET_REACH",
+      MERIDIAN: "MERIDIAN",
+      PALIMPSEST: "PALIMPSEST"
+    },
   MOODS: ["NEUTRAL", "QUIET", "UNSETTLING", "FAMILIAR", "ARTIFICIAL"],
   ANOMALY_MODIFIERS: [
     "SCANNER_JITTER",
@@ -834,22 +950,227 @@ const SECTOR = {
     "PULSE_GHOSTS"
   ],
   SPAWN_PROFILES: {},
-  SEED_SALT: {
-    TYPE: 101,
-    MOOD: 202,
-    ANOMALY: 303,
-    ECHO: 404,
-    BEACON: 505,
-    STARS: 606,
-    GOAL: 707,
-    END_ZONE: 808,
-    ASTEROIDS: 909,
-    PATTERN: 955,
-    FIELD: 1001,
-    RIVER: 1111,
-    ANCHOR: 1222,
-    STATION: 1333
+    SEED_SALT: {
+      TYPE: 101,
+      MOOD: 202,
+      ANOMALY: 303,
+      ECHO: 404,
+      BEACON: 505,
+      STARS: 606,
+      GOAL: 707,
+      END_ZONE: 808,
+      ASTEROIDS: 909,
+      PATTERN: 955,
+      FIELD: 1001,
+      RIVER: 1111,
+      ANCHOR: 1222,
+      STATION: 1333,
+      SPECIAL: 1444,
+      MERIDIAN: 1555
+    },
+  APSE: {
+    RING_RADIUS_RATIO: 0.35,
+    RING_THICKNESS_RATIO: 0.03,
+    OPENING_ARC_DEG: 10,
+    ARC_GAP_DEG: 12,
+    SCAN_POINT_CENTERED: true,
+    RENDER_MODE: "METAL",
+    GEOMETRY_FILL: "rgba(120, 220, 255, 0.18)",
+    GEOMETRY_STROKE: "rgba(120, 220, 255, 0.85)",
+    GEOMETRY_STROKE_WIDTH: 4.0,
+    GEOMETRY_GLOW: "rgba(120, 220, 255, 0.6)",
+    GEOMETRY_GLOW_BLUR: 20,
+    ROT_SPEED_MIN: 0.003,
+    ROT_SPEED_MAX: 0.009,
+    BOUNCE_FACTOR: 0.35,
+    BOUNCE_DAMPING: 0.88,
+    SPRITE_SRC: "assets/ui/sprites/apse_arc.png",
+    SPRITE_CURVATURE_RADIUS: 477.2,
+    SPRITE_CURVATURE_ANCHOR: { x: 768.6, y: 888.2 },
+    SPRITE_ROT_OFFSET_DEG: 90,
+    PORTAL_OFFSET_RATIO: 1.0,
+    BACKGROUND: {
+      TEXTURE_SIZE: 2048,
+      EDGE_FADE_RATIO: 0.04,
+      EDGE_FADE_ALPHA: 0.7,
+      VOID_PROB_PRIMARY: 0.0,
+      VOID_PROB_SECONDARY: 0.0,
+      VOID_PROB_TERTIARY: 0.0,
+      CUT_PROB_PRIMARY: 0.0,
+      CUT_PROB_SECONDARY: 0.0,
+      CUT_PROB_TERTIARY: 0.0,
+      RING_GAP_RATIO: 0.02,
+      COVERAGE_MIN: 0.92,
+      COVERAGE_MAX: 0.97,
+      BASE_FILL_COLOR: "rgb(30, 28, 40)",
+      BASE_FILL_ALPHA: 1.0,
+      PALETTE: [
+        "rgb(120, 114, 98)",
+        "rgb(96, 100, 106)",
+        "rgb(130, 122, 106)",
+        "rgb(98, 110, 116)",
+        "rgb(112, 104, 88)",
+        "rgb(138, 130, 118)"
+      ],
+      PRIMARY_PALETTE: [
+        "rgb(196, 45, 52)",
+        "rgb(233, 158, 54)",
+        "rgb(38, 160, 155)",
+        "rgb(28, 98, 198)",
+        "rgb(58, 170, 96)",
+        "rgb(214, 206, 186)"
+      ],
+      SECONDARY_PALETTE: [
+        "rgb(170, 124, 74)",
+        "rgb(124, 146, 166)",
+        "rgb(156, 120, 170)",
+        "rgb(152, 166, 120)",
+        "rgb(182, 136, 112)"
+      ]
+    },
+      METAL_TEXTURE: {
+        ENABLED: true,
+        TILE_SIZE: 256,
+        BASE_COLOR: "rgb(60, 72, 88)",
+        HIGHLIGHT_COLOR: "rgb(185, 200, 222)",
+        SHADOW_COLOR: "rgb(20, 28, 44)",
+        STREAK_COUNT: 260,
+        STREAK_ALPHA: 0.35,
+        STREAK_SLOPE: 0.18,
+        GRAIN_ALPHA: 0.3,
+        SPECKLE_ALPHA: 0.2,
+        SPECKLE_COUNT: 650,
+        CLOUD_COUNT: 24,
+        CLOUD_ALPHA: 0.22,
+        BAND_COUNT: 12,
+        BAND_ALPHA: 0.18,
+        BAND_WARP: 0.2,
+        OUTER_ALPHA: 1.0,
+        INNER_ALPHA: 1.0,
+        RIB_ALPHA: 0.95,
+        STROKE: "rgba(210, 220, 235, 0.8)",
+        STROKE_WIDTH: 2.2
+      },
+    INTERIOR: {
+      INNER_WALL_ENABLED: false,
+      INNER_RADIUS_RATIO: 0.18,
+      OUTER_INSET_RATIO: 1.6,
+      BAND_COUNT: 3,
+      BAND_THICKNESS_RATIO: 0.3,
+      PRIMARY_WALL_MIN: 2,
+      PRIMARY_WALL_MAX: 5,
+      PRIMARY_ARC_MIN_DEG: 40,
+      PRIMARY_ARC_MAX_DEG: 120,
+      SECONDARY_WALL_MIN: 0,
+      SECONDARY_WALL_MAX: 2,
+      SECONDARY_ARC_MIN_DEG: 12,
+      SECONDARY_ARC_MAX_DEG: 60,
+      SECONDARY_THICKNESS_RATIO: 0.25,
+      ANGLE_DIVS: 36,
+      OPENING_GUARD_DEG: 6,
+      ROT_SPEED_MIN: -0.002,
+      ROT_SPEED_MAX: 0.002,
+      ENTRY_LIP_INSET_RATIO: 0.0,
+      ENTRY_LIP_THICKNESS_RATIO: 1.0,
+      RENDER_MODE: "METAL",
+      FORCEFIELDS: {
+        PRIMARY: {
+          color: "rgba(120, 220, 200, 0.28)",
+          glow: "rgba(120, 220, 200, 0.7)",
+          glowBlur: 18,
+          stroke: "rgba(200, 255, 240, 0.6)",
+          strokeWidth: 1.4
+        },
+        SECONDARY: {
+          color: "rgba(110, 180, 255, 0.22)",
+          glow: "rgba(110, 180, 255, 0.6)",
+          glowBlur: 14,
+          stroke: "rgba(180, 220, 255, 0.55)",
+          strokeWidth: 1.2
+        },
+        ENTRY_LIP: {
+          color: "rgba(200, 150, 255, 0.2)",
+          glow: "rgba(200, 150, 255, 0.45)",
+          glowBlur: 10,
+          stroke: "rgba(220, 190, 255, 0.45)",
+          strokeWidth: 1.0
+        }
+      },
+      PRIMARY_SPRITE_SRC: "assets/ui/sprites/apse_inner_wall.png",
+      SECONDARY_SPRITE_SRC: "assets/ui/sprites/apse_rib.png",
+      ENTRY_LIP_SRC: "assets/ui/sprites/apse_entry_lip.png"
+    },
+    FORCE_NEAR_ORIGIN: false,
+    FORCE_NEAR_ORIGIN_RING: 1,
+    FORCE_SECTOR: { sx: 0, sy: -1 }
   },
+    MERIDIAN: {
+      FORCE_NEAR_ORIGIN: false,
+      FORCE_SECTOR: { sx: 0, sy: -1 },
+      SPINE_WIDTH_MULTIPLIER: 1.0,
+      SPINE_CORE_COLOR: "rgba(210, 230, 255, 0.82)",
+      SPINE_EDGE_COLOR: "rgba(245, 252, 255, 0.95)",
+      SPINE_EDGE_WIDTH: 2.4,
+      BOUNCE: 0.98,
+      CHROMA_SPLIT_STRENGTH: 1.0,
+      CHROMA_SPLIT_HUE: 60,
+      CHROMA_SPLIT_SAT: 2.5,
+      PARALLAX_SHEAR: 0.06,
+      SILENCE_BAND_MULTIPLIER: 3.5,
+      SILENCE_BAND_ALPHA: 0.6,
+      SMEAR_BAND_MULTIPLIER: 3.8,
+      SMEAR_STRETCH: 2.4,
+      SMEAR_ALPHA: 0.45,
+      TRACE_ENABLED: true,
+      TRACE_BAND_MULTIPLIER: 0.65,
+      TRACE_ALPHA: 0.55,
+      TRACE_SPEED: 22,
+      TRACE_SAT: 0.95,
+      TRACE_LIGHT: 0.7,
+      TRACE_LAYER_COUNT: 3
+    },
+    PALIMPSEST: {
+      FORCE_NEAR_ORIGIN: false,
+      FORCE_SECTOR: { sx: 0, sy: -1 },
+      SINGULARITY: {
+        RADIUS_RATIO: 0.08,
+        GRAVITY_RATIO: 0.48,
+        MASS_MULTIPLIER: 1.1,
+        RIM_COLOR: "rgba(130, 150, 190, 0.55)",
+        RIM_BRIGHT: "rgba(200, 220, 255, 0.8)",
+        RIM_THICKNESS_RATIO: 0.01,
+        SHIMMER_SPEED: 0.9,
+        SHIMMER_AMOUNT: 0.7,
+        FLASH_DURATION: 0.15,
+        FLASH_ALPHA: 0.7,
+        FLASH_ARC_SPAN_DEG: 70,
+        FLASH_COLORS: [
+          "rgba(255, 140, 120, 0.75)",
+          "rgba(160, 210, 255, 0.75)",
+          "rgba(200, 140, 255, 0.75)",
+          "rgba(130, 255, 210, 0.75)"
+        ]
+      },
+      FRAGMENTS: {
+        SPRITES: [
+          "assets/ui/sprites/pal_1.png",
+          "assets/ui/sprites/pal_2.png",
+          "assets/ui/sprites/pal_3.png",
+          "assets/ui/sprites/pal_4.png",
+          "assets/ui/sprites/pal_5.png",
+          "assets/ui/sprites/pal_6.png"
+        ],
+        RADIUS_RATIO: 0.04,
+        ORBIT_MIN_RATIO: 0.22,
+        ORBIT_MAX_RATIO: 0.68,
+        ORBIT_ECCENTRICITY: 0.12,
+        ORBIT_SPEED_MIN: 0.012,
+        ORBIT_SPEED_MAX: 0.028,
+        SPIN_SPEED_MIN: 0.08,
+        SPIN_SPEED_MAX: 0.22,
+        BOUNCE: 0.82
+      }
+    },
   ZONES: {
     start: { id: "start", asteroidMultiplier: 0.5 },
     middle: { id: "middle", asteroidMultiplier: 1.0 },
@@ -893,6 +1214,30 @@ SECTOR.SPAWN_PROFILES = {
     asteroids: 0.05,
     scanPoints: 0.2,
     hazards: 0.6
+  },
+  [SECTOR.TYPES.APSE]: {
+    stars: 0.0,
+    asteroids: 0.0,
+    scanPoints: 1.0,
+    hazards: 0.0
+  },
+  [SECTOR.TYPES.QUIET_REACH]: {
+    stars: 0.0,
+    asteroids: 0.0,
+    scanPoints: 1.0,
+    hazards: 0.0
+  },
+  [SECTOR.TYPES.MERIDIAN]: {
+    stars: 0.35,
+    asteroids: 0.0,
+    scanPoints: 1.0,
+    hazards: 0.0
+  },
+  [SECTOR.TYPES.PALIMPSEST]: {
+    stars: 0.0,
+    asteroids: 1.0,
+    scanPoints: 1.0,
+    hazards: 0.0
   }
 };
 
@@ -924,6 +1269,10 @@ const AUDIO = {
       "assets/sounds/mp3/6. noonquil.mp3"
     ],
     VOLUME: 0.45
+  },
+  QUIET_REACH: {
+    FADE_OUT_MS: 1200,
+    FADE_IN_MS: 1200
   }
 };
 
@@ -943,6 +1292,7 @@ export const CONFIG = {
   INPUT,
   AUTOPILOT,
   HUD,
+  CLUES,
   UI,
   PHYSICS,
   BULLET,

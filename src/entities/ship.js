@@ -15,6 +15,68 @@ const THRUST_LOOP_SEGMENT = SHIP.THRUST_LOOP_SEGMENT;
 const THRUST_LOOP_CROSSFADE = SHIP.THRUST_LOOP_CROSSFADE;
 const THRUST_VISUAL = SHIP.THRUST_VISUAL;
 
+const UPGRADE_PALETTES = {
+  SHIELD: ["#567EA6", "#6A94BD", "#7EABD3", "#96C2E6", "#B3DAF4"],
+  FIRE_RATE: ["#A8794E", "#BC8E5B", "#D1A56A", "#E6BF7C", "#F6D993"],
+  FIRE_DISTANCE: ["#5F9E87", "#73B39A", "#89C8AE", "#A4DCC6", "#BDEFD9"],
+  FUEL: ["#5E8E74", "#73A586", "#8BBC9B", "#A2D1B2", "#BCE6C9"],
+  COLLECTOR: ["#8C6FA6", "#9F82BA", "#B598CF", "#C9B0E2", "#DCC7F0"]
+};
+
+const INDICATOR_GEOM = {
+  SHIELD_AURA_INNER: 0.55,
+  SHIELD_AURA_OUTER: 0.9,
+  EMITTER_RADIUS: 0.24,
+  EMITTER_SPREAD: 0.85,
+  FUEL_TOP: 0.1,
+  FUEL_BOTTOM: 0.45,
+  FUEL_WIDTH: 0.18,
+  COLLECTOR_Y_START: -0.05,
+  COLLECTOR_STEP: 0.08,
+  COLLECTOR_WIDTH: 0.16,
+  COLLECTOR_HEIGHT: 0.06,
+  FIRE_LINE_START: -0.48,
+  FIRE_LINE_END: -0.92
+};
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function hexToRgb(hex) {
+  const clean = hex.replace("#", "");
+  const full = clean.length === 3
+    ? clean.split("").map((c) => c + c).join("")
+    : clean;
+  const int = Number.parseInt(full, 16);
+  return {
+    r: (int >> 16) & 255,
+    g: (int >> 8) & 255,
+    b: int & 255
+  };
+}
+
+function rgbaFromHex(hex, alpha) {
+  const { r, g, b } = hexToRgb(hex);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function paletteColor(palette, level) {
+  if (level <= 0) {
+    return null;
+  }
+  const idx = Math.min(level - 1, palette.length - 1);
+  return palette[idx];
+}
+
+function levelAlpha(level, min = 0.35, max = 0.9) {
+  if (level <= 0) {
+    return 0;
+  }
+  const t = clamp01((level - 1) / 4);
+  return min + (max - min) * t;
+}
+
 export class Ship {
   constructor(x, y) {
     this.x = x;
@@ -130,34 +192,264 @@ export class Ship {
     }
   }
 
-  draw(ctx, speed = 0) {
+  draw(ctx, speed = 0, visuals = null) {
     // World-space draw (unused for now)
-    this.drawScreen(ctx, this.x, this.y, speed);
+    this.drawScreen(ctx, this.x, this.y, speed, visuals);
   }
 
-  drawScreen(ctx, sx, sy, speed = 0) {
+  drawScreen(ctx, sx, sy, speed = 0, visuals = null) {
     ctx.save();
     ctx.translate(sx, sy);
     ctx.rotate(this.heading);
 
+    this.drawShieldAura(ctx, visuals);
     if (this.thrusting !== 0 || this.kickTimer > 0) {
       this.drawFlames(ctx, this.thrusting, speed);
     }
-    if (SHIP_SPRITE.complete && SHIP_SPRITE.naturalWidth > 0) {
-      const scale = SHIP_DRAW_SIZE / SHIP_SPRITE.naturalHeight;
-      const drawW = SHIP_SPRITE.naturalWidth * scale;
-      const drawH = SHIP_SPRITE.naturalHeight * scale;
-      ctx.drawImage(SHIP_SPRITE, -drawW / 2, -drawH / 2, drawW, drawH);
-    } else {
-      ctx.beginPath();
-      ctx.moveTo(0, -12);
-      ctx.lineTo(8, 10);
-      ctx.lineTo(-8, 10);
-      ctx.closePath();
+    this.drawIndicators(ctx, visuals);
+    this.drawHull(ctx);
+    ctx.restore();
+  }
 
-      ctx.fillStyle = "white";
-      ctx.fill();
+  drawShieldAura(ctx, visuals) {
+    const shieldLevel = Math.max(0, visuals?.shieldLevel ?? 0);
+    const shieldRatio = clamp01(visuals?.shieldRatio ?? 0);
+    if (shieldLevel <= 0 || shieldRatio <= 0) {
+      return;
     }
+    const color = paletteColor(UPGRADE_PALETTES.SHIELD, shieldLevel);
+    if (!color) {
+      return;
+    }
+    const radius = SHIP_DRAW_SIZE * 0.58;
+    const inner = SHIP_DRAW_SIZE * INDICATOR_GEOM.SHIELD_AURA_INNER;
+    const outer = SHIP_DRAW_SIZE * INDICATOR_GEOM.SHIELD_AURA_OUTER;
+    const glow = ctx.createRadialGradient(0, 0, inner, 0, 0, outer);
+    const alpha = clamp01(shieldRatio) * levelAlpha(shieldLevel, 0.35, 0.8);
+    glow.addColorStop(0, rgbaFromHex(color, alpha));
+    glow.addColorStop(1, rgbaFromHex(color, 0));
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(0, 0, Math.max(radius, outer), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  drawIndicators(ctx, visuals) {
+    if (!visuals) {
+      return;
+    }
+    const now = performance.now() / 1000;
+    const shieldLevel = Math.max(0, visuals.shieldLevel ?? 0);
+    const shieldRatio = clamp01(visuals.shieldRatio ?? 0);
+    const fireRateLevel = Math.max(0, visuals.fireRateLevel ?? 0);
+    const fireDistanceLevel = Math.max(0, visuals.fireDistanceLevel ?? 0);
+    const fuelTankLevel = Math.max(0, visuals.fuelTankLevel ?? 0);
+    const fuelRatio = clamp01(visuals.fuelRatio ?? 0);
+    const collectorLevel = Math.max(0, visuals.collectorLevel ?? 0);
+    const fireCooldown = Math.max(0.05, visuals.fireCooldownSeconds ?? 0.26);
+
+    const half = SHIP_DRAW_SIZE / 2;
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    if (shieldLevel > 0) {
+      const color = paletteColor(UPGRADE_PALETTES.SHIELD, shieldLevel);
+      if (color) {
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = levelAlpha(shieldLevel, 0.35, 0.75) * shieldRatio;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(0, 0, half * 0.28, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
+    if (fireRateLevel > 0) {
+      const color = paletteColor(UPGRADE_PALETTES.FIRE_RATE, fireRateLevel);
+      if (color) {
+        const pulse = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin((now / fireCooldown) * Math.PI * 2));
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = levelAlpha(fireRateLevel, 0.25, 0.75) * pulse;
+        ctx.lineWidth = 1.1;
+        const ticks = Math.max(1, fireRateLevel);
+        const baseAngle = -Math.PI / 2;
+        const spread = INDICATOR_GEOM.EMITTER_SPREAD;
+        for (let i = 0; i < ticks; i++) {
+          const t = ticks === 1 ? 0.5 : i / (ticks - 1);
+          const angle = baseAngle - spread * 0.5 + spread * t;
+          const r0 = half * 0.18;
+          const r1 = half * INDICATOR_GEOM.EMITTER_RADIUS;
+          const x0 = Math.cos(angle) * r0;
+          const y0 = Math.sin(angle) * r0;
+          const x1 = Math.cos(angle) * r1;
+          const y1 = Math.sin(angle) * r1;
+          ctx.beginPath();
+          ctx.moveTo(x0, y0);
+          ctx.lineTo(x1, y1);
+          ctx.stroke();
+        }
+      }
+    }
+
+    if (fireDistanceLevel > 0) {
+      const color = paletteColor(UPGRADE_PALETTES.FIRE_DISTANCE, fireDistanceLevel);
+      if (color) {
+        const lineStart = SHIP_DRAW_SIZE * INDICATOR_GEOM.FIRE_LINE_START;
+        const lineEnd = SHIP_DRAW_SIZE * (INDICATOR_GEOM.FIRE_LINE_END - fireDistanceLevel * 0.04);
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = levelAlpha(fireDistanceLevel, 0.2, 0.7);
+        ctx.lineWidth = 1;
+        if (fireDistanceLevel >= 2) {
+          ctx.setLineDash([2, 3]);
+        }
+        ctx.beginPath();
+        ctx.moveTo(0, lineStart);
+        ctx.lineTo(0, lineEnd);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        if (fireDistanceLevel >= 3) {
+          ctx.globalAlpha *= 0.6;
+          ctx.beginPath();
+          ctx.moveTo(2, lineStart + 2);
+          ctx.lineTo(2, lineEnd + 2);
+          ctx.stroke();
+        }
+      }
+    }
+
+    if (fuelTankLevel > 0) {
+      const color = paletteColor(UPGRADE_PALETTES.FUEL, fuelTankLevel);
+      if (color) {
+        const cells = fuelTankLevel * 3;
+        const top = SHIP_DRAW_SIZE * INDICATOR_GEOM.FUEL_TOP;
+        const bottom = SHIP_DRAW_SIZE * INDICATOR_GEOM.FUEL_BOTTOM;
+        const height = bottom - top;
+        const cellH = height / cells;
+        const cellW = SHIP_DRAW_SIZE * INDICATOR_GEOM.FUEL_WIDTH;
+        const filled = Math.round(cells * fuelRatio);
+        for (let i = 0; i < cells; i++) {
+          const y0 = top + i * cellH;
+          const alpha = i < filled ? 0.7 : 0.25;
+          ctx.strokeStyle = color;
+          ctx.globalAlpha = levelAlpha(fuelTankLevel, 0.3, 0.7) * alpha;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.rect(-cellW / 2, y0, cellW, cellH * 0.8);
+          ctx.stroke();
+        }
+      }
+    }
+
+    if (collectorLevel > 0) {
+      const color = paletteColor(UPGRADE_PALETTES.COLLECTOR, collectorLevel);
+      if (color) {
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = levelAlpha(collectorLevel, 0.25, 0.7);
+        ctx.lineWidth = 1.1;
+        const count = collectorLevel;
+        const wobble = collectorLevel > 1 ? Math.sin(now * 1.4) * 0.02 : 0;
+        for (let i = 0; i < count; i++) {
+          const y = SHIP_DRAW_SIZE * (INDICATOR_GEOM.COLLECTOR_Y_START + i * INDICATOR_GEOM.COLLECTOR_STEP);
+          const halfW = SHIP_DRAW_SIZE * INDICATOR_GEOM.COLLECTOR_WIDTH * 0.5;
+          const h = SHIP_DRAW_SIZE * INDICATOR_GEOM.COLLECTOR_HEIGHT;
+          const offset = wobble * (i + 1);
+          ctx.beginPath();
+          ctx.moveTo(-halfW - offset, y - h * 0.5);
+          ctx.lineTo(-halfW * 0.35 - offset, y);
+          ctx.lineTo(-halfW - offset, y + h * 0.5);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(halfW + offset, y - h * 0.5);
+          ctx.lineTo(halfW * 0.35 + offset, y);
+          ctx.lineTo(halfW + offset, y + h * 0.5);
+          ctx.stroke();
+        }
+      }
+    }
+
+    ctx.restore();
+  }
+
+  drawHull(ctx) {
+    const half = SHIP_DRAW_SIZE / 2;
+    const noseW = SHIP_DRAW_SIZE * 0.22;
+    const bodyW = SHIP_DRAW_SIZE * 0.42;
+    const tailW = SHIP_DRAW_SIZE * 0.3;
+    const noseY = -half * 0.9;
+    const shoulderY = -half * 0.55;
+    const midY = half * 0.2;
+    const tailY = half * 0.58;
+    const exhaustY = half * 0.9;
+    const hullFill = "rgba(245, 246, 248, 0.95)";
+    const hullEdge = "rgba(0, 0, 0, 0.9)";
+    const innerColor = "rgba(130, 130, 130, 0.75)";
+
+    ctx.save();
+    ctx.fillStyle = hullFill;
+    ctx.lineWidth = 2.6;
+    ctx.strokeStyle = hullEdge;
+    ctx.beginPath();
+    ctx.moveTo(-noseW, noseY);
+    ctx.lineTo(-bodyW, shoulderY);
+    ctx.lineTo(-bodyW, midY);
+    ctx.lineTo(-tailW, tailY);
+    ctx.lineTo(-tailW * 0.6, exhaustY);
+    ctx.lineTo(tailW * 0.6, exhaustY);
+    ctx.lineTo(tailW, tailY);
+    ctx.lineTo(bodyW, midY);
+    ctx.lineTo(bodyW, shoulderY);
+    ctx.lineTo(noseW, noseY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.strokeStyle = innerColor;
+    ctx.lineWidth = 1;
+
+    // Sensor nose / perception arc
+    ctx.beginPath();
+    ctx.moveTo(-noseW * 0.65, noseY + half * 0.08);
+    ctx.lineTo(noseW * 0.65, noseY + half * 0.08);
+    ctx.stroke();
+
+    // Navigation spine
+    ctx.beginPath();
+    ctx.moveTo(0, shoulderY + half * 0.06);
+    ctx.lineTo(0, midY - half * 0.08);
+    ctx.stroke();
+
+    // Power core
+    const coreW = SHIP_DRAW_SIZE * 0.22;
+    const coreH = SHIP_DRAW_SIZE * 0.16;
+    ctx.strokeRect(-coreW / 2, -coreH / 2, coreW, coreH);
+
+    // Structural frame lines
+    ctx.beginPath();
+    ctx.moveTo(-bodyW * 0.75, 0);
+    ctx.lineTo(bodyW * 0.75, 0);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-bodyW * 0.65, midY - half * 0.02);
+    ctx.lineTo(bodyW * 0.65, midY - half * 0.02);
+    ctx.stroke();
+
+    // Propulsion bays
+    const bayW = SHIP_DRAW_SIZE * 0.18;
+    const bayH = SHIP_DRAW_SIZE * 0.14;
+    const bayY = half * 0.42;
+    ctx.strokeRect(-bodyW * 0.72 - bayW / 2, bayY - bayH / 2, bayW, bayH);
+    ctx.strokeRect(bodyW * 0.72 - bayW / 2, bayY - bayH / 2, bayW, bayH);
+
+    // Exhaust plane
+    ctx.beginPath();
+    ctx.moveTo(-tailW * 0.6, exhaustY);
+    ctx.lineTo(tailW * 0.6, exhaustY);
+    ctx.stroke();
+
     ctx.restore();
   }
 

@@ -3,6 +3,8 @@ import { ResourcePickup } from "../entities/resourcePickup.js";
 import { integrate } from "./physics.js";
 import { applyForcesToEntity } from "./forceFields.js";
 import { CONFIG } from "./config.js";
+import { getRarityValueMultiplier, rollRarityIndex } from "./resourceRarity.js";
+import { resolveMeridianCollision } from "./meridian.js";
 
 const { PICKUPS, ENEMY, ASTEROID, RESOURCE, STATION } = CONFIG;
 const FUEL_PICKUP_AMOUNT_RATIO = PICKUPS.FUEL.AMOUNT_RATIO;
@@ -275,10 +277,89 @@ function findSectorForPosition(activeSectors, x, y) {
   return null;
 }
 
+function collectApseColliders(sectors) {
+  if (!Array.isArray(sectors) || sectors.length === 0) {
+    return [];
+  }
+  const colliders = [];
+  for (const sector of sectors) {
+    if (!sector?.apseRing && !sector?.apseInterior) {
+      continue;
+    }
+    const ring = sector.apseRing ?? null;
+    const interior = sector.apseInterior ?? null;
+    const center = ring?.center ?? interior?.center ?? null;
+    const thickness = Number.isFinite(ring?.thickness)
+      ? ring.thickness
+      : (Number.isFinite(sector.apseRingThickness) ? sector.apseRingThickness : 0);
+    const outerRadius = Number.isFinite(interior?.outerWallOuterRadius)
+      ? interior.outerWallOuterRadius
+      : (Number.isFinite(ring?.radius) ? ring.radius + thickness / 2 : null);
+    colliders.push({
+      ring,
+      interior,
+      center,
+      outerRadius,
+      thickness,
+      bounds: sector.bounds ?? null
+    });
+  }
+  return colliders;
+}
+
+function integrateWithApseCollisions(body, radius, sector, dt, apseColliders = null) {
+  const colliders = Array.isArray(apseColliders)
+    ? apseColliders
+    : collectApseColliders(sector ? [sector] : []);
+  if (colliders.length === 0) {
+    integrate(body, dt);
+    return;
+  }
+
+  const vx = Number.isFinite(body.vx) ? body.vx : 0;
+  const vy = Number.isFinite(body.vy) ? body.vy : 0;
+  const speed = Math.hypot(vx, vy);
+  let maxThickness = 0;
+  for (const collider of colliders) {
+    if (Number.isFinite(collider?.thickness)) {
+      maxThickness = Math.max(maxThickness, collider.thickness);
+    }
+  }
+  const maxStep = maxThickness > 0 ? maxThickness * 0.35 : 24;
+  const steps = Math.max(1, Math.ceil((speed * dt) / maxStep));
+  const subDt = dt / steps;
+  for (let i = 0; i < steps; i++) {
+    body.x += vx * subDt;
+    body.y += vy * subDt;
+    for (const collider of colliders) {
+      const ring = collider?.ring;
+      const interior = collider?.interior;
+      if (!ring && !interior) {
+        continue;
+      }
+      if (collider.center && Number.isFinite(collider.outerRadius)) {
+        const dx = body.x - collider.center.x;
+        const dy = body.y - collider.center.y;
+        const pad = (collider.thickness ?? 0) + radius;
+        if ((dx * dx + dy * dy) > (collider.outerRadius + pad) * (collider.outerRadius + pad)) {
+          continue;
+        }
+      }
+      if (ring) {
+        ring.resolveCollision(body, radius);
+      }
+      if (interior) {
+        interior.resolveBodyCollision(body, radius);
+      }
+    }
+  }
+}
+
 export function updateFuelPickups(fuelPickups, activeStars, activeSectors, dt, worldAgeMs = null) {
   if (fuelPickups.length === 0) {
     return;
   }
+  const apseColliders = collectApseColliders(activeSectors);
   for (const fuel of fuelPickups) {
     if (Number.isFinite(worldAgeMs) && Number.isFinite(fuel.spawnTimeMs)) {
       fuel.ageMs = Math.max(0, worldAgeMs - fuel.spawnTimeMs);
@@ -287,7 +368,10 @@ export function updateFuelPickups(fuelPickups, activeStars, activeSectors, dt, w
     const sector = findSectorForPosition(activeSectors, fuel.x, fuel.y);
     const rivers = sector?.runtimeRivers ?? [];
     applyForcesToEntity(fuel, dt, activeStars, rivers, CONFIG);
-    integrate(fuel, dt);
+    integrateWithApseCollisions(fuel, FUEL_PICKUP.RADIUS, sector, dt, apseColliders);
+    if (sector?.meridian) {
+      resolveMeridianCollision(fuel, FUEL_PICKUP.RADIUS, sector.meridian);
+    }
   }
 }
 
@@ -295,6 +379,7 @@ export function updateResourcePickups(resourcePickups, activeStars, activeSector
   if (resourcePickups.length === 0) {
     return;
   }
+  const apseColliders = collectApseColliders(activeSectors);
   for (const pickup of resourcePickups) {
     if (Number.isFinite(worldAgeMs) && Number.isFinite(pickup.spawnTimeMs)) {
       pickup.ageMs = Math.max(0, worldAgeMs - pickup.spawnTimeMs);
@@ -303,7 +388,10 @@ export function updateResourcePickups(resourcePickups, activeStars, activeSector
     const sector = findSectorForPosition(activeSectors, pickup.x, pickup.y);
     const rivers = sector?.runtimeRivers ?? [];
     applyForcesToEntity(pickup, dt, activeStars, rivers, CONFIG);
-    integrate(pickup, dt);
+    integrateWithApseCollisions(pickup, RESOURCE_DROP.RADIUS, sector, dt, apseColliders);
+    if (sector?.meridian) {
+      resolveMeridianCollision(pickup, RESOURCE_DROP.RADIUS, sector.meridian);
+    }
   }
 }
 
@@ -325,7 +413,7 @@ export function handleFuelPickups(fuelPickups, ship, shipRadius, scorePoints, ad
   }
 }
 
-export function handleResourcePickups(resourcePickups, ship, shipRadius, addResource, sounds) {
+export function handleResourcePickups(resourcePickups, ship, shipRadius, addResource, sounds, onPickup = null) {
   if (resourcePickups.length === 0) {
     return;
   }
@@ -335,6 +423,9 @@ export function handleResourcePickups(resourcePickups, ship, shipRadius, addReso
     const dy = ship.y - pickup.y;
     if (Math.hypot(dx, dy) < RESOURCE_DROP.RADIUS + shipRadius) {
       addResource(pickup.value);
+      if (typeof onPickup === "function") {
+        onPickup(pickup);
+      }
       sounds?.play("got_money");
       resourcePickups.splice(i, 1);
     }
@@ -524,6 +615,9 @@ export function updateEnemies(
     const rivers = sector?.runtimeRivers ?? [];
     applyForcesToEntity(enemy, dt, activeStars, rivers, CONFIG);
     integrate(enemy, dt);
+    if (sector?.meridian) {
+      resolveMeridianCollision(enemy, ENEMY_HIT_RADIUS, sector.meridian);
+    }
     if (enemy.canFire() && dist <= enemyFireRange) {
       sounds.play("enemy_laser");
       spawnEnemyBullet(enemyBullets, enemy, bulletSpeed, enemyBulletLife);
@@ -594,15 +688,21 @@ function spawnResourceDrop(resourcePickups, source, spawnTimeMs) {
     return;
   }
   const generation = Number.isFinite(source.generation) ? source.generation : 0;
-  const value = Math.max(
+  const baseValue = Math.max(
     RESOURCE_DROP.MIN_VALUE,
     Math.round(RESOURCE_DROP.BASE_VALUE * Math.pow(RESOURCE_DROP.DECAY, generation))
   );
+  const rarityIndex = rollRarityIndex();
+  const valueMultiplier = getRarityValueMultiplier(rarityIndex);
+  const value = Math.max(RESOURCE_DROP.MIN_VALUE, Math.round(baseValue * valueMultiplier));
   const driftAngle = Math.random() * Math.PI * 2;
   const driftSpeed = 20 + Math.random() * 60;
   const vx = Math.cos(driftAngle) * driftSpeed + source.vx * 0.15;
   const vy = Math.sin(driftAngle) * driftSpeed + source.vy * 0.15;
-  const pickup = new ResourcePickup(source.x, source.y, vx, vy, value, spawnTimeMs);
+  const pickup = new ResourcePickup(source.x, source.y, vx, vy, value, spawnTimeMs, {
+    rarityIndex,
+    valueMultiplier
+  });
   pickup.ttlMs = RESOURCE_DROP.TTL_MS;
   resourcePickups.push(pickup);
 }

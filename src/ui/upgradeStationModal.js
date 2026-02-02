@@ -33,7 +33,7 @@ export function showUpgradeStationModal(root, state, onAction) {
   const list = document.createElement("div");
   list.className = "upgrade-list";
 
-  const createRow = (label, actionKey) => {
+  const createRow = (label, actionKey, buttonText = "Purchase") => {
     const row = document.createElement("div");
     row.className = "upgrade-row";
 
@@ -44,13 +44,16 @@ export function showUpgradeStationModal(root, state, onAction) {
     const level = document.createElement("div");
     level.className = "upgrade-level";
 
+    const gain = document.createElement("div");
+    gain.className = "upgrade-gain";
+
     const cost = document.createElement("div");
     cost.className = "upgrade-cost";
 
     const button = document.createElement("button");
     button.type = "button";
     button.className = "upgrade-button";
-    button.textContent = "Purchase";
+    button.textContent = buttonText;
     button.addEventListener("click", () => {
       if (onAction) {
         onAction(actionKey);
@@ -59,21 +62,28 @@ export function showUpgradeStationModal(root, state, onAction) {
 
     row.appendChild(name);
     row.appendChild(level);
+    row.appendChild(gain);
     row.appendChild(cost);
     row.appendChild(button);
 
-    return { row, level, cost, button };
+    return { row, level, gain, cost, button };
   };
 
   const fireRow = createRow("Fire Rate", "fireRate");
+  const fireDistanceRow = createRow("Fire Distance", "fireDistance");
+  const fuelTankRow = createRow("Fuel Tank", "fuelTank", "Upgrade");
   const hullRow = createRow("Hull Strength", "hull");
   const collectorRow = createRow("Collector", "collector");
   const repairRow = createRow("Repair Hull", "repair");
+  const refuelRow = createRow("Refuel", "refuel", "Refuel");
 
   list.appendChild(fireRow.row);
+  list.appendChild(fireDistanceRow.row);
+  list.appendChild(fuelTankRow.row);
   list.appendChild(hullRow.row);
   list.appendChild(collectorRow.row);
   list.appendChild(repairRow.row);
+  list.appendChild(refuelRow.row);
 
   panel.appendChild(title);
   panel.appendChild(closeButton);
@@ -86,24 +96,44 @@ export function showUpgradeStationModal(root, state, onAction) {
   const update = (next) => {
     const data = next ?? state;
     currency.textContent = `Resource: ${Math.round(data.currency ?? 0)}`;
-    tierCap.textContent = data.tierCap ? `Tier cap: ${data.tierCap}` : "Tier cap: none";
+    tierCap.textContent = data.tierCap ? `Tier cap (advisory): ${data.tierCap}` : "Tier cap: none";
 
-    fireRow.level.textContent = `Level ${data.upgrades.fireRateLevel} / ${data.caps.fireRateLevel}`;
-    fireRow.cost.textContent = data.costs.fireRate !== null ? `${data.costs.fireRate}` : "MAX";
-    fireRow.button.disabled = data.costs.fireRate === null || (data.currency ?? 0) < data.costs.fireRate;
+    fireRow.level.textContent = `Level ${data.upgrades.fireRateLevel}`;
+    fireRow.gain.textContent = data.gains?.fireRate ?? "";
+    fireRow.cost.textContent = `${data.costs.fireRate}`;
+    fireRow.button.disabled = (data.currency ?? 0) < data.costs.fireRate;
 
-    hullRow.level.textContent = `Level ${data.upgrades.hullLevel} / ${data.caps.hullLevel}`;
-    hullRow.cost.textContent = data.costs.hull !== null ? `${data.costs.hull}` : "MAX";
-    hullRow.button.disabled = data.costs.hull === null || (data.currency ?? 0) < data.costs.hull;
+    fireDistanceRow.level.textContent = `Level ${data.upgrades.fireDistanceLevel}`;
+    fireDistanceRow.gain.textContent = data.gains?.fireDistance ?? "";
+    fireDistanceRow.cost.textContent = `${data.costs.fireDistance}`;
+    fireDistanceRow.button.disabled = (data.currency ?? 0) < data.costs.fireDistance;
 
-    collectorRow.level.textContent = `Level ${data.upgrades.collectorLevel} / ${data.caps.collectorLevel}`;
-    collectorRow.cost.textContent = data.costs.collector !== null ? `${data.costs.collector}` : "MAX";
-    collectorRow.button.disabled = data.costs.collector === null || (data.currency ?? 0) < data.costs.collector;
+    fuelTankRow.level.textContent = `Level ${data.upgrades.fuelTankLevel}`;
+    fuelTankRow.gain.textContent = data.gains?.fuelTank ?? "";
+    fuelTankRow.cost.textContent = `${data.costs.fuelTank}`;
+    fuelTankRow.button.disabled = (data.currency ?? 0) < data.costs.fuelTank;
+
+    hullRow.level.textContent = `Level ${data.upgrades.hullLevel}`;
+    hullRow.gain.textContent = data.gains?.hull ?? "";
+    hullRow.cost.textContent = `${data.costs.hull}`;
+    hullRow.button.disabled = (data.currency ?? 0) < data.costs.hull;
+
+    collectorRow.level.textContent = `Level ${data.upgrades.collectorLevel}`;
+    collectorRow.gain.textContent = data.gains?.collector ?? "";
+    collectorRow.cost.textContent = `${data.costs.collector}`;
+    collectorRow.button.disabled = (data.currency ?? 0) < data.costs.collector;
 
     const missing = Math.max(0, (data.maxLives ?? 0) - (data.lives ?? 0));
     repairRow.level.textContent = missing > 0 ? `${missing} missing` : "Fully repaired";
+    repairRow.gain.textContent = missing > 0 ? "Restore" : "OK";
     repairRow.cost.textContent = data.costs.repair !== null ? `${data.costs.repair}` : "N/A";
     repairRow.button.disabled = data.costs.repair === null || (data.currency ?? 0) < data.costs.repair;
+
+    const missingFuel = Math.max(0, (data.maxFuel ?? 0) - (data.fuel ?? 0));
+    refuelRow.level.textContent = missingFuel > 0 ? `${Math.ceil(missingFuel)} needed` : "Tank full";
+    refuelRow.gain.textContent = missingFuel > 0 ? "Refill" : "OK";
+    refuelRow.cost.textContent = data.costs.refuel !== null ? `${data.costs.refuel}` : "N/A";
+    refuelRow.button.disabled = data.costs.refuel === null || (data.currency ?? 0) < data.costs.refuel;
   };
 
   update(state);

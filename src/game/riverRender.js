@@ -30,6 +30,11 @@ function rgba(color, alpha) {
   return `rgba(${color[0]}, ${color[1]}, ${color[2]}, ${alpha})`;
 }
 
+function seededFloat(seed, offset = 0) {
+  const x = Math.sin((seed + offset) * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
 function drawPolyline(ctx, points) {
   if (!points || points.length < 2) {
     return;
@@ -327,10 +332,15 @@ export function drawRivers(ctx, rivers, viewRect, worldAgeTicks, activeStars = [
     const snapped = snapAnchorToStar(anchor, activeStars);
     const phase = anchorHuePhase(anchor.id, worldAgeTicks);
     const t = 0.5 + 0.5 * Math.sin(phase);
-    const outerColor = mixColor(baseColors[0], baseColors[1], t);
-    const innerColor = mixColor(baseColors[2], baseColors[1], 1 - t);
-    const baseRadius = 110;
-    const radius = snapped.snapped ? baseRadius * 1.15 : baseRadius;
+    const colorSeed = seededFloat(anchor.id, 5.7);
+    const altSeed = seededFloat(anchor.id, 11.3);
+    const idxA = Math.floor(colorSeed * baseColors.length) % baseColors.length;
+    const idxB = (idxA + 1 + Math.floor(altSeed * (baseColors.length - 1))) % baseColors.length;
+    const outerColor = mixColor(baseColors[idxA], baseColors[idxB], t);
+    const innerColor = mixColor(baseColors[idxB], baseColors[idxA], 1 - t);
+    const sizeSeed = seededFloat(anchor.id, 2.4);
+    const baseRadius = 80 + sizeSeed * 90;
+    const radius = baseRadius * (snapped.snapped ? 1.25 : 1);
     const outerAlpha = CONFIG.RIVER.RENDER.OUTER_ALPHA;
     const midAlpha = CONFIG.RIVER.RENDER.MID_ALPHA;
     const coreAlpha = CONFIG.RIVER.RENDER.CORE_ALPHA * (snapped.snapped ? 0.9 : 1);

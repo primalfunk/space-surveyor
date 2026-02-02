@@ -180,6 +180,22 @@
     .start-legend-icon.legend-fuel {
       background-image: url("assets/ui/sprites/fuel.png");
     }
+    .start-legend-icon.legend-resource-duo {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 4px;
+      width: 34px;
+    }
+    .legend-resource-crystal {
+      width: 14px;
+      height: 18px;
+      background-image: url("assets/ui/sprites/crystal.png");
+      background-size: contain;
+      background-repeat: no-repeat;
+      background-position: center;
+      filter: sepia(1) saturate(5);
+    }
     .start-legend-icon.legend-survey {
       background-image: url("assets/ui/sprites/scan_point.png");
     }
@@ -484,7 +500,7 @@
       }
       .upgrade-row {
         display: grid;
-        grid-template-columns: 1.4fr 0.7fr 0.5fr auto;
+        grid-template-columns: 1.4fr 0.7fr 0.8fr 0.5fr auto;
         gap: 10px;
         align-items: center;
         padding: 10px 12px;
@@ -499,6 +515,12 @@
         font-size: 12px;
         letter-spacing: 1px;
         color: var(--ui-muted);
+      }
+      .upgrade-gain {
+        font-size: 12px;
+        letter-spacing: 1px;
+        color: var(--ui-accent);
+        text-align: right;
       }
       .upgrade-cost {
         font-size: 13px;
@@ -538,7 +560,7 @@
         position: absolute;
         width: 32px;
         height: 32px;
-        border-radius: 50%;
+        border-radius: 6px;
         font-size: 14px;
         letter-spacing: 1px;
         text-transform: uppercase;
@@ -548,6 +570,11 @@
         box-shadow: 0 0 12px rgba(120, 200, 190, 0.35);
         z-index: 6;
         cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        line-height: 1;
+        padding: 0;
       }
       .exit-button:hover,
       .exit-button:focus {

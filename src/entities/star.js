@@ -30,6 +30,10 @@ export class Star {
     this.gravityRadius = opts.gravityRadius ?? (this.radius * DEFAULTS.GRAVITY_RADIUS_MULTIPLIER);
     this.rotation = opts.rotation ?? 0;
     this.rotationSpeed = opts.rotationSpeed ?? 0;
+    this.special = opts.special ?? null;
+    this.flashTimer = 0;
+    this.flashAngle = 0;
+    this.flashDuration = this.special?.flashDuration ?? 0;
     this.pulsePhase = opts.pulsePhase ?? Math.random() * Math.PI * 2;
     this.pulseSpeed = opts.pulseSpeed ?? DEFAULTS.PULSE_SPEED;
     this.pulseAmount = opts.pulseAmount ?? DEFAULTS.PULSE_AMOUNT;
@@ -40,6 +44,9 @@ export class Star {
     this.rotation += this.rotationSpeed * dt;
     this.pulsePhase += this.pulseSpeed * dt;
     this.pulseScale = 1 + Math.sin(this.pulsePhase) * this.pulseAmount;
+    if (this.flashTimer > 0) {
+      this.flashTimer = Math.max(0, this.flashTimer - dt);
+    }
     if (this.motion && Number.isFinite(timeSeconds)) {
       if (this.motion.type === "orbit") {
         const angle = (this.motion.phase ?? 0) + timeSeconds * (this.motion.angularSpeed ?? 0);
@@ -54,6 +61,15 @@ export class Star {
     }
   }
 
+  triggerFlash(angle = 0) {
+    if (this.special?.type !== "singularity") {
+      return;
+    }
+    this.flashAngle = angle;
+    this.flashDuration = this.special?.flashDuration ?? this.flashDuration ?? 0.35;
+    this.flashTimer = this.flashDuration;
+  }
+
   draw(ctx) {
     const gravityRadius = this.gravityRadius;
     if (Number.isFinite(gravityRadius) && gravityRadius > this.radius) {
@@ -66,6 +82,63 @@ export class Star {
       ctx.fill();
       ctx.stroke();
       ctx.restore();
+    }
+
+    if (this.special?.type === "singularity") {
+      const rimThickness = this.special?.rimThickness ?? (this.radius * 0.12);
+      const shimmer = 0.5 + 0.5 * Math.sin(this.pulsePhase);
+      ctx.save();
+      ctx.fillStyle = this.bodyColor;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      ctx.save();
+      ctx.lineWidth = rimThickness;
+      ctx.strokeStyle = this.special?.rimColor ?? "rgba(140, 160, 200, 0.6)";
+      ctx.globalAlpha = 0.25 + shimmer * (this.special?.shimmerAmount ?? 0.45);
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.radius + rimThickness * 0.15, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = this.special?.rimBright ?? "rgba(210, 230, 255, 0.8)";
+      ctx.globalAlpha = 0.2 + shimmer * 0.6;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.radius + rimThickness * 0.25, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+
+      if (this.flashTimer > 0 && this.flashDuration > 0) {
+        const t = this.flashTimer / this.flashDuration;
+        const colors = this.special?.flashColors;
+        const colorIndex = colors?.length
+          ? Math.floor((((this.flashAngle % (Math.PI * 2)) + Math.PI * 2) / (Math.PI * 2)) * colors.length) % colors.length
+          : 0;
+        const flashColor = colors?.length ? colors[colorIndex] : "rgba(255, 200, 160, 0.7)";
+        const span = this.special?.flashArcSpan ?? (Math.PI / 2);
+        const alpha = (this.special?.flashAlpha ?? 0.6) * t;
+        const startAngle = this.flashAngle - span * 0.5;
+        const endAngle = this.flashAngle + span * 0.5;
+        const ringRadius = this.radius + rimThickness * 0.25;
+        const ringWidth = rimThickness * 0.55;
+        const segments = 18;
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.strokeStyle = flashColor;
+        ctx.lineWidth = ringWidth;
+        for (let i = 0; i < segments; i++) {
+          const segStart = startAngle + (span * i) / segments;
+          const segEnd = startAngle + (span * (i + 1)) / segments;
+          const segT = (i + 0.5) / segments;
+          const fade = Math.sin(Math.PI * segT);
+          ctx.globalAlpha = alpha * fade;
+          ctx.beginPath();
+          ctx.arc(this.x, this.y, ringRadius, segStart, segEnd);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+      return;
     }
 
     const glowAlpha = 0.18 + Math.abs(Math.sin(this.pulsePhase)) * 0.2;

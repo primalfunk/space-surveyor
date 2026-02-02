@@ -13,6 +13,8 @@ class SoundManager {
     this.unlocked = false;
     this.muted = false;
     this.mutedKeys = new Set();
+    this.masterVolume = 1;
+    this.masterFadeId = null;
   }
 
   preload() {
@@ -22,7 +24,10 @@ class SoundManager {
     for (const [key, def] of Object.entries(this.defs)) {
       const audio = new Audio(def.src);
       audio.preload = "auto";
-      audio.volume = clampVolume(def.volume ?? 1);
+      const baseVolume = clampVolume(def.volume ?? 1);
+      audio._baseVolume = baseVolume;
+      audio._volumeBase = baseVolume;
+      audio.volume = clampVolume(baseVolume * this.masterVolume);
       this.pool.set(key, [audio]);
     }
     this.preloaded = true;
@@ -81,7 +86,10 @@ class SoundManager {
       audio.preload = "auto";
       pool.push(audio);
     }
-    audio.volume = clampVolume(def.volume ?? 1);
+    const baseVolume = clampVolume(def.volume ?? 1);
+    audio._baseVolume = baseVolume;
+    audio._volumeBase = baseVolume;
+    audio.volume = clampVolume(baseVolume * this.masterVolume);
     audio.currentTime = 0;
     const playResult = audio.play();
     if (playResult && typeof playResult.then === "function") {
@@ -100,7 +108,7 @@ class SoundManager {
     if (!def) {
       return;
     }
-    const volume = clampVolume(def.volume ?? 1);
+    const baseVolume = clampVolume(def.volume ?? 1);
     if (def.loopMode === "native") {
       let pool = this.pool.get(key);
       if (!pool) {
@@ -114,7 +122,9 @@ class SoundManager {
         pool.push(audio);
       }
       audio.loop = true;
-      audio.volume = clampVolume(volume);
+      audio._baseVolume = baseVolume;
+      audio._volumeBase = baseVolume;
+      audio.volume = clampVolume(baseVolume * this.masterVolume);
       audio.currentTime = 0;
       this.loopHandles.set(key, {
         audio,
@@ -139,7 +149,9 @@ class SoundManager {
     const makeAudio = () => {
       const audio = new Audio(def.src);
       audio.preload = "auto";
-      audio.volume = clampVolume(volume);
+      audio._baseVolume = baseVolume;
+      audio._volumeBase = baseVolume;
+      audio.volume = clampVolume(baseVolume * this.masterVolume);
       return audio;
     };
 
@@ -150,14 +162,16 @@ class SoundManager {
     let stopped = false;
     const rafIds = new Set();
 
-    const fade = (audio, from, to, onDone) => {
+    const fade = (audio, fromBase, toBase, onDone) => {
       const start = performance.now();
       const step = (time) => {
         if (stopped) {
           return;
         }
         const t = Math.min(1, (time - start) / fadeMs);
-        audio.volume = clampVolume(from + (to - from) * t);
+        const baseVolume = fromBase + (toBase - fromBase) * t;
+        audio._volumeBase = baseVolume;
+        audio.volume = clampVolume(baseVolume * this.masterVolume);
         if (t < 1) {
           const id = requestAnimationFrame(step);
           rafIds.add(id);
@@ -171,7 +185,9 @@ class SoundManager {
 
     const startAudio = (audio, fadeIn) => {
       audio.currentTime = 0;
-      audio.volume = fadeIn ? 0 : clampVolume(volume);
+      const startBase = fadeIn ? 0 : (audio._baseVolume ?? baseVolume);
+      audio._volumeBase = startBase;
+      audio.volume = clampVolume(startBase * this.masterVolume);
       const playResult = audio.play();
       if (playResult && typeof playResult.then === "function") {
         playResult.catch(() => {
@@ -181,16 +197,20 @@ class SoundManager {
         });
       }
       if (fadeIn) {
-        fade(audio, 0, volume);
+        fade(audio, 0, audio._baseVolume ?? baseVolume);
       }
     };
 
     const stopAudio = (audio) => {
-      const from = audio.volume;
-      fade(audio, from, 0, () => {
+      const fromBase = Number.isFinite(audio._volumeBase)
+        ? audio._volumeBase
+        : (audio._baseVolume ?? baseVolume);
+      fade(audio, fromBase, 0, () => {
         audio.pause();
         audio.currentTime = 0;
-        audio.volume = clampVolume(volume);
+        const resetBase = audio._baseVolume ?? baseVolume;
+        audio._volumeBase = resetBase;
+        audio.volume = clampVolume(resetBase * this.masterVolume);
       });
     };
 
@@ -220,8 +240,12 @@ class SoundManager {
         b.pause();
         a.currentTime = 0;
         b.currentTime = 0;
-        a.volume = clampVolume(volume);
-        b.volume = clampVolume(volume);
+        const resetBase = a._baseVolume ?? baseVolume;
+        a._volumeBase = resetBase;
+        a.volume = clampVolume(resetBase * this.masterVolume);
+        const resetBaseB = b._baseVolume ?? baseVolume;
+        b._volumeBase = resetBaseB;
+        b.volume = clampVolume(resetBaseB * this.masterVolume);
       }
     });
   }
@@ -239,6 +263,76 @@ class SoundManager {
       handle.audio.currentTime = 0;
     }
     this.loopHandles.delete(key);
+  }
+
+  applyMasterVolume() {
+    const applyVolume = (audio, fallbackBase) => {
+      if (!audio) {
+        return;
+      }
+      const base = Number.isFinite(audio._volumeBase)
+        ? audio._volumeBase
+        : (Number.isFinite(audio._baseVolume) ? audio._baseVolume : fallbackBase);
+      audio.volume = clampVolume(base * this.masterVolume);
+    };
+    for (const [key, pool] of this.pool.entries()) {
+      const def = this.defs[key];
+      const fallbackBase = clampVolume(def?.volume ?? 1);
+      for (const audio of pool) {
+        applyVolume(audio, fallbackBase);
+      }
+    }
+    for (const handle of this.loopHandles.values()) {
+      if (handle?.audio) {
+        applyVolume(handle.audio, handle.audio._baseVolume ?? 1);
+      } else if (Array.isArray(handle?.audios)) {
+        for (const audio of handle.audios) {
+          applyVolume(audio, audio?._baseVolume ?? 1);
+        }
+      }
+    }
+  }
+
+  setMasterVolume(value) {
+    const next = clampVolume(value);
+    if (this.masterVolume === next) {
+      return;
+    }
+    this.masterVolume = next;
+    this.applyMasterVolume();
+  }
+
+  fadeMasterVolume(target, durationMs = 600, onDone = null) {
+    const targetVolume = clampVolume(target);
+    if (this.masterFadeId) {
+      cancelAnimationFrame(this.masterFadeId);
+      this.masterFadeId = null;
+    }
+    const from = this.masterVolume;
+    const duration = Math.max(0, durationMs);
+    if (duration === 0) {
+      this.masterVolume = targetVolume;
+      this.applyMasterVolume();
+      if (typeof onDone === "function") {
+        onDone();
+      }
+      return;
+    }
+    const start = performance.now();
+    const step = (time) => {
+      const t = Math.min(1, (time - start) / duration);
+      this.masterVolume = clampVolume(from + (targetVolume - from) * t);
+      this.applyMasterVolume();
+      if (t < 1) {
+        this.masterFadeId = requestAnimationFrame(step);
+      } else {
+        this.masterFadeId = null;
+        if (typeof onDone === "function") {
+          onDone();
+        }
+      }
+    };
+    this.masterFadeId = requestAnimationFrame(step);
   }
 
   setMuted(muted) {
@@ -272,14 +366,15 @@ export const sounds = new SoundManager(SOUND_DEFS);
 class MusicManager {
   constructor(tracks, volume = 0.5) {
     this.tracks = tracks;
-    this.volume = volume;
+    this.baseVolume = clampVolume(volume);
     this.audio = new Audio();
     this.audio.preload = "auto";
-    this.audio.volume = volume;
+    this.audio.volume = this.baseVolume;
     this.index = 0;
     this.playing = false;
     this.unlocked = false;
     this.onEnded = this.onEnded.bind(this);
+    this.fadeId = null;
   }
 
   onEnded() {
@@ -356,6 +451,50 @@ class MusicManager {
     this.audio.removeEventListener("ended", this.onEnded);
     this.audio.pause();
     this.audio.currentTime = 0;
+  }
+
+  getBaseVolume() {
+    return this.baseVolume;
+  }
+
+  setBaseVolume(value) {
+    this.baseVolume = clampVolume(value);
+    this.audio.volume = this.baseVolume;
+  }
+
+  fadeTo(target, durationMs = 600, onDone = null) {
+    const targetVolume = clampVolume(target);
+    if (this.fadeId) {
+      cancelAnimationFrame(this.fadeId);
+      this.fadeId = null;
+    }
+    const from = this.audio.volume;
+    const duration = Math.max(0, durationMs);
+    if (duration === 0) {
+      this.audio.volume = targetVolume;
+      if (typeof onDone === "function") {
+        onDone();
+      }
+      return;
+    }
+    const start = performance.now();
+    const step = (time) => {
+      const t = Math.min(1, (time - start) / duration);
+      this.audio.volume = clampVolume(from + (targetVolume - from) * t);
+      if (t < 1) {
+        this.fadeId = requestAnimationFrame(step);
+      } else {
+        this.fadeId = null;
+        if (typeof onDone === "function") {
+          onDone();
+        }
+      }
+    };
+    this.fadeId = requestAnimationFrame(step);
+  }
+
+  fadeToBase(durationMs = 600, onDone = null) {
+    this.fadeTo(this.baseVolume, durationMs, onDone);
   }
 }
 

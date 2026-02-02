@@ -81,6 +81,18 @@ export function showStartScreen(root, onStart, onReset) {
 
   const legendList = document.createElement("div");
   legendList.className = "start-legend-list";
+  const pickDistinctHues = () => {
+    const hueA = Math.floor(Math.random() * 360);
+    let hueB = Math.floor(Math.random() * 360);
+    let guard = 0;
+    while (Math.abs(hueA - hueB) < 40 && guard < 10) {
+      hueB = Math.floor(Math.random() * 360);
+      guard += 1;
+    }
+    return [hueA, hueB];
+  };
+  const resourceHues = pickDistinctHues();
+
   const legendEntries = [
     {
       icon: "ship",
@@ -108,6 +120,12 @@ export function showStartScreen(root, onStart, onReset) {
       desc: "Refill tank to keep thrusting."
     },
     {
+      icon: "resource",
+      dual: true,
+      name: "Resources - Upgrade Currency",
+      desc: "Collect crystals to buy upgrades."
+    },
+    {
       icon: "survey",
       name: "Survey Sites - Drop Zones",
       desc: "Deliver surveys to score and advance."
@@ -118,8 +136,20 @@ export function showStartScreen(root, onStart, onReset) {
     const item = document.createElement("div");
     item.className = "start-legend-item";
 
-    const icon = document.createElement("div");
-    icon.className = `start-legend-icon legend-${entry.icon}`;
+    let icon = null;
+    if (entry.icon === "resource" && entry.dual) {
+      icon = document.createElement("div");
+      icon.className = "start-legend-icon legend-resource-duo";
+      resourceHues.forEach((hue) => {
+        const crystal = document.createElement("div");
+        crystal.className = "legend-resource-crystal";
+        crystal.style.filter = `sepia(1) saturate(5) hue-rotate(${hue}deg) brightness(1.1)`;
+        icon.appendChild(crystal);
+      });
+    } else {
+      icon = document.createElement("div");
+      icon.className = `start-legend-icon legend-${entry.icon}`;
+    }
 
     const text = document.createElement("div");
     text.className = "start-legend-text";

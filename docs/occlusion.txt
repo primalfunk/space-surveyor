@@ -1,0 +1,234 @@
+OCCLUSION & IMPEDANCE SECTOR MODIFIERS SPEC (v1)
+Visual Obscuring and Motion Drag as Primary Weirdness Axes
+
+This document defines two concrete, implementable sector modifiers:
+VISUAL OCCLUSION and MOTION IMPEDANCE.
+
+These modifiers are additive overlays on top of existing sector templates
+(normal sectors and archetype sectors such as Apse, Meridian, Palimpsest,
+Quiet Reach).
+
+They are designed to increase perceived weirdness through perception and effort,
+not danger or failure.
+
+----------------------------------------------------------------
+DESIGN INTENT (LOCKED)
+----------------------------------------------------------------
+
+1) Weirdness should feel physical, not abstract.
+2) Cost should be time, fuel, and attention — never sudden failure.
+3) Players should sense increasing resistance from the universe, not hostility.
+4) Effects must be legible, tunable, and cheap to implement.
+5) These modifiers may scale continuously with progression.
+
+----------------------------------------------------------------
+MODIFIER AXIS A — VISUAL OCCLUSION
+----------------------------------------------------------------
+
+Concept:
+Reduction of long-range visibility through space fog or interference.
+Represents uncertainty, loss of clarity, and degraded perception.
+
+Occlusion NEVER:
+- damages the player
+- hides immediate collision geometry without warning
+- removes the scan point entirely
+
+----------------------------------------------------------------
+A1. FULL OCCLUDED FIELD
+----------------------------------------------------------------
+
+Description:
+A uniform fog layer fills the sector, limiting visibility to a radius
+around the player ship.
+
+Visual behavior:
+- Distant objects fade smoothly into fog
+- Near-field objects remain fully visible
+- Fog density increases gradually with distance
+
+Implementation notes:
+- Radial alpha mask centered on player
+- OR depth-based fade (distance from camera)
+- No true volumetric simulation required
+
+Tuning parameters:
+- visibility_radius
+- edge_softness
+- fog_opacity
+- scan_point_visibility_override (boolean)
+
+Player experience:
+- Encourages slower movement
+- Forces reliance on near-field awareness
+- Increases tension without threat
+
+Recommended usage:
+- Palimpsest sectors
+- Mid to late progression normal sectors
+
+----------------------------------------------------------------
+A2. PATCHY OCCLUDED FIELD
+----------------------------------------------------------------
+
+Description:
+Fog exists in discrete regions rather than filling the entire sector.
+
+Visual behavior:
+- Fog blobs or sheets obscure portions of space
+- Visibility clears immediately upon exiting a fog region
+
+Implementation notes:
+- Multiple fog volumes with circular or irregular masks
+- No collision required
+
+Tuning parameters:
+- number_of_fog_patches
+- patch_radius_range
+- patch_density_variance
+
+Player experience:
+- Encourages path selection
+- Creates emergent routes and hiding spaces
+- Fog becomes navigational terrain
+
+Recommended usage:
+- Normal sectors
+- Palimpsest sectors
+- Rarely in Meridian sectors (early only)
+
+----------------------------------------------------------------
+MODIFIER AXIS B — MOTION IMPEDANCE
+----------------------------------------------------------------
+
+Concept:
+Regions of space apply drag to the player ship, increasing effort and fuel cost.
+Represents fatigue, resistance, and the cost of continued motion.
+
+Impedance NEVER:
+- immobilizes the ship
+- overrides player input
+- causes damage
+
+----------------------------------------------------------------
+B1. DRAG FIELD
+----------------------------------------------------------------
+
+Description:
+Entering a drag field applies linear damping to the ship’s velocity.
+
+Mechanical behavior:
+- Translation speed reduced
+- Thrust remains responsive but less effective
+- Fuel consumption increases proportionally
+
+Implementation notes:
+- Apply velocity *= drag_factor per update
+- Optional fuel_burn_multiplier while inside field
+- Rotation may be unaffected (recommended default)
+
+Tuning parameters:
+- drag_factor
+- fuel_multiplier
+- affects_rotation (boolean)
+
+Player experience:
+- Movement feels “thick” or “heavy”
+- Pushing through is possible but costly
+- Encourages intentional movement
+
+Recommended usage:
+- Mid to late game sectors
+- Near Quiet Reach
+- As escalation of normal space
+
+----------------------------------------------------------------
+B2. LAYERED DRAG FIELDS
+----------------------------------------------------------------
+
+Description:
+Multiple drag regions with varying strength exist in a single sector.
+
+Mechanical behavior:
+- Some regions mildly impede motion
+- Others significantly slow progress
+- Visual density correlates imperfectly with drag strength
+
+Implementation notes:
+- Same drag logic as B1
+- Different parameters per region instance
+
+Tuning parameters:
+- min_drag_factor
+- max_drag_factor
+- correlation_to_visual_density (loose, not exact)
+
+Player experience:
+- Players learn not to trust appearance fully
+- Careful probing rewarded
+- Reinforces interpretive uncertainty
+
+Recommended usage:
+- Palimpsest sectors
+- Late-game normal sectors
+
+----------------------------------------------------------------
+COMBINED MODIFIERS (RECOMMENDED PATTERNS)
+----------------------------------------------------------------
+
+C1. OCCLUDED + DRAG (HEAVY SILENCE)
+- Full or patchy fog combined with drag fields
+- Low visibility + high effort
+- Strong late-game withdrawal tone
+
+C2. CLEAR BUT HEAVY
+- No visual occlusion
+- Global low-level drag applied everywhere
+- Feels subtly wrong despite clarity
+
+C3. FOG WITH CHANNELS
+- Dense fog + drag in most of sector
+- Clear, low-drag corridors cut through
+- Encourages following invisible “currents”
+
+----------------------------------------------------------------
+PROGRESSION SCALING GUIDELINES
+----------------------------------------------------------------
+
+Early game:
+- Light occlusion only
+- Minimal or no drag
+- Effects mostly atmospheric
+
+Mid game:
+- Patchy occlusion
+- Noticeable drag regions
+- Fuel tradeoffs become meaningful
+
+Late game:
+- Dense occlusion
+- High drag fields
+- Clear-but-heavy sectors introduced
+- Quiet Reach adjacency increases
+
+----------------------------------------------------------------
+COMPATIBILITY RULES
+----------------------------------------------------------------
+
+- Occlusion and Drag may stack.
+- Quiet Reach sectors may use Drag but should never use Occlusion.
+- Meridian sectors should use Occlusion sparingly and Drag minimally.
+- Apse interiors may include localized Drag for difficulty tuning.
+- Palimpsest sectors freely combine both axes.
+
+----------------------------------------------------------------
+NON-NEGOTIABLE DESIGN AXIOMS
+----------------------------------------------------------------
+
+1) No sudden failure states.
+2) No surprise damage.
+3) No instant loss of control.
+4) The universe resists; it does not attack.
+5) Effort replaces danger.
+
+END OF SPEC

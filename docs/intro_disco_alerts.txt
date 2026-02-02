@@ -1,0 +1,31 @@
+Discovery/intro alerts and their firing conditions
+
+Systems online. Survey and exit freely.
+Trigger: intro.enabled and intro.clock >= INTRO.START_DELAY and intro.flags.systems is false.
+
+Lore points reveal clues and increase score.
+Trigger: intro.controlUsed and intro.flags.goals is false. (Highlights goal/exit)
+
+Momentum matters. Chains and distance amplify score.
+Trigger: (intro.firstSurveyComplete OR intro.clock >= INTRO.SCORE_TIMEOUT) and intro.flags.score is false. (Highlights score)
+
+Fuel is freedom. Drift wisely.
+Trigger: ship.maxFuel > 0, fuel ratio <= INTRO.FUEL_RATIO, and intro.flags.fuel is false. (Highlights fuel)
+
+Space is not uniform. Patterns emerge further out.
+Trigger: (intro.sectorTransitions >= 1 OR ring >= 1) and intro.flags.weird is false. (Highlights vignette)
+
+Currents shape motion. Ride them.
+Trigger: getClosestRiverInfo(...) returns a river with dist < width/2 and intro.flags.rivers is false. (Highlights river)
+
+Stars bend paths. Respect their pull.
+Trigger: active stars exist, computeStarAccelAt magnitude >= INTRO.STAR_PULL_ACCEL, and intro.flags.stars is false.
+
+Distance is remembered.
+Trigger: intro.sectorTransitions >= INTRO.LONGRUN_TRANSITIONS and intro.flags.distance is false. (Highlights score; releases suppressed alerts afterward)
+
+Not everything here is inert. (Same text, different triggers)
+Anomaly sector: sector.sectorType === SECTOR_TYPES.ANOMALY
+Echo sector: sector.sectorType === SECTOR_TYPES.ECHO
+Moving stars: any star.motion
+Station present: sector.station
