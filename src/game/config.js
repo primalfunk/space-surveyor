@@ -1096,9 +1096,9 @@ const SECTOR = {
           strokeWidth: 1.0
         }
       },
-      PRIMARY_SPRITE_SRC: "assets/ui/sprites/apse_inner_wall.png",
-      SECONDARY_SPRITE_SRC: "assets/ui/sprites/apse_rib.png",
-      ENTRY_LIP_SRC: "assets/ui/sprites/apse_entry_lip.png"
+      PRIMARY_SPRITE_SRC: "assets/ui/sprites/apse_arc.png",
+      SECONDARY_SPRITE_SRC: "assets/ui/sprites/apse_arc.png",
+      ENTRY_LIP_SRC: "assets/ui/sprites/apse_arc.png"
     },
     FORCE_NEAR_ORIGIN: false,
     FORCE_NEAR_ORIGIN_RING: 1,

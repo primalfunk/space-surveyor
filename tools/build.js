@@ -122,12 +122,7 @@ function topoSort(entryPath, graph) {
 
 function buildIndexHtml() {
   const indexPath = path.join(ROOT, "index.html");
-  const html = fs.readFileSync(indexPath, "utf8");
-  const scriptTag = /<script\s+type="module"\s+src="[^"]+"><\/script>/;
-  if (!scriptTag.test(html)) {
-    throw new Error("index.html script tag not found or unexpected format.");
-  }
-  return html.replace(scriptTag, "<script src=\"game.js\"></script>");
+  return fs.readFileSync(indexPath, "utf8");
 }
 
 function ensureDir(dir) {
@@ -203,6 +198,18 @@ function inlineAssets(text, assetMap) {
   return output;
 }
 
+function reportUnresolvedAssets(label, text) {
+  const matches = text.match(/assets\/[^"' )]+/g);
+  if (!matches || matches.length === 0) {
+    return;
+  }
+  const unique = Array.from(new Set(matches));
+  console.warn(`[build] Unresolved asset refs in ${label}:`);
+  for (const entry of unique) {
+    console.warn(`  - ${entry}`);
+  }
+}
+
 function clearDir(dir) {
   if (!fs.existsSync(dir)) {
     return;
@@ -242,9 +249,11 @@ function main() {
   const bundle = buildGameBundle();
   const assetMap = buildAssetMap();
   const inlinedBundle = inlineAssets(bundle, assetMap);
+  reportUnresolvedAssets("game.js", inlinedBundle);
   fs.writeFileSync(path.join(DIST_DIR, "game.js"), inlinedBundle, "utf8");
   const indexHtml = buildIndexHtml();
   const inlinedIndex = inlineAssets(indexHtml, assetMap);
+  reportUnresolvedAssets("index.html", inlinedIndex);
   fs.writeFileSync(path.join(DIST_DIR, "index.html"), inlinedIndex, "utf8");
   console.log("Build complete: dist/index.html, dist/game.js (assets inlined)");
 }

@@ -3,6 +3,41 @@ import { CONFIG } from "./config.js";
 const SOUND_DEFS = CONFIG.AUDIO.SOUNDS;
 
 const clampVolume = (value) => Math.max(0, Math.min(1, value));
+const AUDIO_SRC_CACHE = new Map();
+
+function resolveAudioSrc(src) {
+  if (typeof src !== "string") {
+    return src;
+  }
+  if (!src.startsWith("data:")) {
+    return src;
+  }
+  if (AUDIO_SRC_CACHE.has(src)) {
+    return AUDIO_SRC_CACHE.get(src);
+  }
+  const commaIndex = src.indexOf(",");
+  if (commaIndex < 0) {
+    return src;
+  }
+  const meta = src.slice(5, commaIndex);
+  if (!meta.includes(";base64")) {
+    return src;
+  }
+  const mime = meta.split(";")[0] || "audio/mpeg";
+  try {
+    const binary = atob(src.slice(commaIndex + 1));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const blob = new Blob([bytes], { type: mime });
+    const url = URL.createObjectURL(blob);
+    AUDIO_SRC_CACHE.set(src, url);
+    return url;
+  } catch (err) {
+    return src;
+  }
+}
 
 class SoundManager {
   constructor(defs) {
@@ -22,7 +57,7 @@ class SoundManager {
       return;
     }
     for (const [key, def] of Object.entries(this.defs)) {
-      const audio = new Audio(def.src);
+      const audio = new Audio(resolveAudioSrc(def.src));
       audio.preload = "auto";
       const baseVolume = clampVolume(def.volume ?? 1);
       audio._baseVolume = baseVolume;
@@ -82,7 +117,7 @@ class SoundManager {
     }
     let audio = pool.find((entry) => entry.paused || entry.ended);
     if (!audio) {
-      audio = new Audio(def.src);
+      audio = new Audio(resolveAudioSrc(def.src));
       audio.preload = "auto";
       pool.push(audio);
     }
@@ -117,7 +152,7 @@ class SoundManager {
       }
       let audio = pool[0];
       if (!audio) {
-        audio = new Audio(def.src);
+        audio = new Audio(resolveAudioSrc(def.src));
         audio.preload = "auto";
         pool.push(audio);
       }
@@ -147,7 +182,7 @@ class SoundManager {
     const intervalMs = Math.max(40, segmentMs - fadeMs);
 
     const makeAudio = () => {
-      const audio = new Audio(def.src);
+      const audio = new Audio(resolveAudioSrc(def.src));
       audio.preload = "auto";
       audio._baseVolume = baseVolume;
       audio._volumeBase = baseVolume;
@@ -365,7 +400,7 @@ export const sounds = new SoundManager(SOUND_DEFS);
 
 class MusicManager {
   constructor(tracks, volume = 0.5) {
-    this.tracks = tracks;
+    this.tracks = tracks.map((track) => resolveAudioSrc(track));
     this.baseVolume = clampVolume(volume);
     this.audio = new Audio();
     this.audio.preload = "auto";

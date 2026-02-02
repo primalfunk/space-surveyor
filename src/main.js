@@ -72,11 +72,18 @@ function startDemo() {
 }
 
 function showStartScreenWithDemo() {
-  startDemo();
-  showStartScreen(uiRoot, () => {
+  stopDemo();
+  let screen = null;
+  screen = showStartScreen(uiRoot, () => {
     stopDemo();
     beginGame();
-  }, resetWorld);
+  }, resetWorld, {
+    onReady: () => {
+      if (screen) {
+        startDemo();
+      }
+    }
+  });
 }
 
 function beginGame() {

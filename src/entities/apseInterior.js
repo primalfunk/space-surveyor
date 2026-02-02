@@ -12,9 +12,9 @@ const SPRITE_ROT_OFFSET = Number.isFinite(APSE.SPRITE_ROT_OFFSET_DEG)
   : 0;
 
 const SPRITE_SOURCES = {
-  PRIMARY_WALL: INTERIOR.PRIMARY_SPRITE_SRC ?? "assets/ui/sprites/apse_inner_wall.png",
-  SECONDARY_PARTITION: INTERIOR.SECONDARY_SPRITE_SRC ?? "assets/ui/sprites/apse_rib.png",
-  ENTRY_LIP: INTERIOR.ENTRY_LIP_SRC ?? "assets/ui/sprites/apse_entry_lip.png"
+  PRIMARY_WALL: INTERIOR.PRIMARY_SPRITE_SRC ?? "assets/ui/sprites/apse_arc.png",
+  SECONDARY_PARTITION: INTERIOR.SECONDARY_SPRITE_SRC ?? "assets/ui/sprites/apse_arc.png",
+  ENTRY_LIP: INTERIOR.ENTRY_LIP_SRC ?? "assets/ui/sprites/apse_arc.png"
 };
 
 const RENDER_MODE = INTERIOR.RENDER_MODE ?? "FORCEFIELDS";

@@ -1,30 +1,97 @@
 import { sounds } from "../game/audio.js";
+import { CONFIG } from "../game/config.js";
 
-export function showStartScreen(root, onStart, onReset) {
+const IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"];
+
+function isImageAsset(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+  if (value.startsWith("data:image/")) {
+    return true;
+  }
+  const lower = value.toLowerCase();
+  return IMAGE_EXTS.some((ext) => lower.endsWith(ext));
+}
+
+function collectAssetUrls(source, output) {
+  if (!source) {
+    return;
+  }
+  if (typeof source === "string") {
+    if (isImageAsset(source)) {
+      output.add(source);
+    }
+    return;
+  }
+  if (Array.isArray(source)) {
+    for (const entry of source) {
+      collectAssetUrls(entry, output);
+    }
+    return;
+  }
+  if (typeof source === "object") {
+    for (const entry of Object.values(source)) {
+      collectAssetUrls(entry, output);
+    }
+  }
+}
+
+function preloadImages(urls, onProgress) {
+  if (!urls.length) {
+    if (typeof onProgress === "function") {
+      onProgress(1);
+    }
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    let remaining = urls.length;
+    const total = urls.length;
+    const done = () => {
+      remaining -= 1;
+      if (typeof onProgress === "function") {
+        onProgress((total - remaining) / total);
+      }
+      if (remaining <= 0) {
+        resolve();
+      }
+    };
+    for (const src of urls) {
+      const img = new Image();
+      img.onload = done;
+      img.onerror = done;
+      img.src = src;
+    }
+  });
+}
+
+export function showStartScreen(root, onStart, onReset, options = {}) {
   if (!root) {
     return null;
   }
-
-  sounds.preload();
+  const { onReady } = options;
+  root.classList.add("start-screen-active");
+  const bootScreen = document.getElementById("boot-screen");
 
   const overlay = document.createElement("div");
   overlay.className = "overlay start-screen";
+  if (bootScreen) {
+    overlay.style.opacity = "0";
+    overlay.style.pointerEvents = "none";
+  }
 
   const panel = document.createElement("div");
   panel.className = "start-panel";
 
   const title = document.createElement("div");
   title.className = "start-title";
-  title.textContent = "Space Surveyor (V1)";
-
-  const subtitle = document.createElement("div");
-  subtitle.className = "start-subtitle";
-  subtitle.textContent = "";
+  title.textContent = "Concordant (V1)";
 
   const button = document.createElement("button");
   button.type = "button";
   button.className = "start-button start-capsule";
-  button.textContent = "Tap to Start";
+  button.textContent = "Loading...";
+  button.disabled = true;
 
 
   const blurb = document.createElement("div");
@@ -250,7 +317,6 @@ export function showStartScreen(root, onStart, onReset) {
   }, 4200);
 
   panel.appendChild(title);
-  panel.appendChild(subtitle);
   panel.appendChild(carousel);
   panel.appendChild(button);
   panel.appendChild(blurb);
@@ -262,6 +328,23 @@ export function showStartScreen(root, onStart, onReset) {
   overlay.appendChild(bgLayer);
 
   const bgObjects = createBackgroundObjects(bgLayer, 6, 4);
+
+  const hiddenExitButtons = [];
+  const hideExitButtons = () => {
+    const buttons = root.querySelectorAll(".exit-button");
+    buttons.forEach((btn) => {
+      if (!btn || btn.dataset.startHidden === "1") {
+        return;
+      }
+      btn.dataset.startHidden = "1";
+      hiddenExitButtons.push({
+        el: btn,
+        display: btn.style.display
+      });
+      btn.style.display = "none";
+    });
+  };
+  hideExitButtons();
 
   let started = false;
   const start = (shouldReset = false) => {
@@ -279,19 +362,65 @@ export function showStartScreen(root, onStart, onReset) {
     }
   };
 
-  button.addEventListener("click", () => start(true));
+  const handleStartClick = () => start(true);
+  button.addEventListener("click", handleStartClick);
 
+  let alive = true;
   function cleanup() {
-    button.removeEventListener("click", start);
+    if (!alive) {
+      return;
+    }
+    alive = false;
+    button.removeEventListener("click", handleStartClick);
     for (const obj of bgObjects) {
       obj.stop();
     }
     clearInterval(slideTimer);
+    root.classList.remove("start-screen-active");
+    for (const entry of hiddenExitButtons) {
+      if (!entry?.el) {
+        continue;
+      }
+      entry.el.style.display = entry.display;
+      entry.el.dataset.startHidden = "";
+    }
     overlay.remove();
   }
+  const startPreload = () => {
+    const assetUrls = new Set();
+    collectAssetUrls(CONFIG, assetUrls);
+    sounds.preload();
+    const finishBoot = () => {
+      if (bootScreen) {
+        bootScreen.classList.add("boot-exit");
+        window.setTimeout(() => {
+          if (bootScreen.parentElement) {
+            bootScreen.remove();
+          }
+        }, 360);
+      }
+      overlay.style.opacity = "";
+      overlay.style.pointerEvents = "auto";
+    };
+
+    preloadImages([...assetUrls]).finally(() => {
+      if (!alive) {
+        return;
+      }
+      button.disabled = false;
+      button.textContent = "Start Game";
+      finishBoot();
+      if (typeof onReady === "function") {
+        onReady();
+      }
+    });
+  };
+  requestAnimationFrame(startPreload);
+
+  const destroy = () => cleanup();
 
   return {
-    destroy: cleanup,
+    destroy,
     start
   };
 }
