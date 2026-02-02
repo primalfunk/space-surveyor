@@ -3,6 +3,7 @@ const path = require("path");
 
 const ROOT = path.resolve(__dirname, "..");
 const DIST_DIR = path.join(ROOT, "dist");
+const ASSETS_DIR = path.join(ROOT, "assets");
 const ENTRY = "src/main.js";
 
 function stripImports(source) {
@@ -133,13 +134,119 @@ function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+function getMimeType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".svg":
+      return "image/svg+xml";
+    case ".webp":
+      return "image/webp";
+    case ".mp3":
+      return "audio/mpeg";
+    case ".ogg":
+      return "audio/ogg";
+    case ".wav":
+      return "audio/wav";
+    case ".json":
+      return "application/json";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+function collectFiles(dir) {
+  const files = [];
+  if (!fs.existsSync(dir)) {
+    return files;
+  }
+  for (const entry of fs.readdirSync(dir)) {
+    const full = path.join(dir, entry);
+    const stat = fs.lstatSync(full);
+    if (stat.isDirectory()) {
+      files.push(...collectFiles(full));
+    } else {
+      files.push(full);
+    }
+  }
+  return files;
+}
+
+function buildAssetMap() {
+  const files = collectFiles(ASSETS_DIR);
+  return files.map((filePath) => {
+    const rel = path.relative(ROOT, filePath).replace(/\\/g, "/");
+    const mime = getMimeType(filePath);
+    const data = fs.readFileSync(filePath);
+    const base64 = data.toString("base64");
+    return {
+      path: rel,
+      dataUri: `data:${mime};base64,${base64}`
+    };
+  });
+}
+
+function inlineAssets(text, assetMap) {
+  let output = text;
+  const sorted = [...assetMap].sort((a, b) => b.path.length - a.path.length);
+  for (const asset of sorted) {
+    output = output.split(`"${asset.path}"`).join(`"${asset.dataUri}"`);
+    output = output.split(`'${asset.path}'`).join(`'${asset.dataUri}'`);
+    output = output.split(`(${asset.path})`).join(`(${asset.dataUri})`);
+  }
+  return output;
+}
+
+function clearDir(dir) {
+  if (!fs.existsSync(dir)) {
+    return;
+  }
+  for (const entry of fs.readdirSync(dir)) {
+    const full = path.join(dir, entry);
+    const stat = fs.lstatSync(full);
+    if (stat.isDirectory()) {
+      clearDir(full);
+      fs.rmdirSync(full);
+    } else {
+      fs.unlinkSync(full);
+    }
+  }
+}
+
+function copyDir(src, dest) {
+  if (!fs.existsSync(src)) {
+    return;
+  }
+  ensureDir(dest);
+  for (const entry of fs.readdirSync(src)) {
+    const from = path.join(src, entry);
+    const to = path.join(dest, entry);
+    const stat = fs.lstatSync(from);
+    if (stat.isDirectory()) {
+      copyDir(from, to);
+    } else {
+      fs.copyFileSync(from, to);
+    }
+  }
+}
+
 function main() {
   ensureDir(DIST_DIR);
+  clearDir(DIST_DIR);
   const bundle = buildGameBundle();
-  fs.writeFileSync(path.join(DIST_DIR, "game.js"), bundle, "utf8");
+  const assetMap = buildAssetMap();
+  const inlinedBundle = inlineAssets(bundle, assetMap);
+  fs.writeFileSync(path.join(DIST_DIR, "game.js"), inlinedBundle, "utf8");
   const indexHtml = buildIndexHtml();
-  fs.writeFileSync(path.join(DIST_DIR, "index.html"), indexHtml, "utf8");
-  console.log("Build complete: dist/index.html, dist/game.js");
+  const inlinedIndex = inlineAssets(indexHtml, assetMap);
+  fs.writeFileSync(path.join(DIST_DIR, "index.html"), inlinedIndex, "utf8");
+  console.log("Build complete: dist/index.html, dist/game.js (assets inlined)");
 }
 
 main();
