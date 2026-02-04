@@ -85,7 +85,7 @@ export function showStartScreen(root, onStart, onReset, options = {}) {
 
   const title = document.createElement("div");
   title.className = "start-title";
-  title.textContent = "Concordant (V1)";
+  title.textContent = "Concordant (V0.5)";
 
   const button = document.createElement("button");
   button.type = "button";
@@ -96,7 +96,7 @@ export function showStartScreen(root, onStart, onReset, options = {}) {
 
   const blurb = document.createElement("div");
   blurb.className = "start-blurb";
-  blurb.textContent = "Conserve fuel. Survey unknown systems. Chart your legacy.";
+  blurb.textContent = "Conserve fuel. Uncover a lost civilization.";
 
   const carousel = document.createElement("div");
   carousel.className = "start-carousel";

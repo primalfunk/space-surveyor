@@ -37,6 +37,7 @@ export function createDefaultGameState(seed = generateSeed()) {
       recentBeaconVisits: []
     },
     resourceCurrency: 0,
+    armor: 0,
     clues: {
       totalCollected: 0,
       collectedIds: [],
@@ -45,6 +46,7 @@ export function createDefaultGameState(seed = generateSeed()) {
     upgrades: {
       fireRateLevel: 0,
       fireDistanceLevel: 0,
+      scanDistanceLevel: 0,
       hullLevel: 0,
       collectorLevel: 0,
       fuelTankLevel: 0
@@ -83,12 +85,14 @@ export function normalizeGameState(raw) {
   base.history.recentBeaconVisits = ensureArray(historyRaw.recentBeaconVisits);
 
   base.resourceCurrency = Math.max(0, Math.floor(clampNumber(raw.resourceCurrency, 0)));
+  base.armor = Math.max(0, Math.floor(clampNumber(raw.armor, base.armor)));
   base.clues.totalCollected = Math.max(0, Math.floor(clampNumber(clueRaw.totalCollected, 0)));
   base.clues.collectedIds = ensureArray(clueRaw.collectedIds).filter((id) => Number.isFinite(id));
   base.clues.selectedVariants = isPlainObject(clueRaw.selectedVariants) ? clueRaw.selectedVariants : {};
   if (isPlainObject(raw.upgrades)) {
     base.upgrades.fireRateLevel = clampLevel(raw.upgrades.fireRateLevel);
     base.upgrades.fireDistanceLevel = clampLevel(raw.upgrades.fireDistanceLevel);
+    base.upgrades.scanDistanceLevel = clampLevel(raw.upgrades.scanDistanceLevel);
     base.upgrades.hullLevel = clampLevel(raw.upgrades.hullLevel);
     base.upgrades.collectorLevel = clampLevel(raw.upgrades.collectorLevel);
     base.upgrades.fuelTankLevel = clampLevel(raw.upgrades.fuelTankLevel);

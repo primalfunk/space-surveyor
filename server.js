@@ -4,6 +4,7 @@ const path = require("path");
 const app = express();
 const PORT = process.env.PORT || 3000;
 const ROOT_DIR = path.resolve(__dirname);
+const DIST_DIR = path.join(ROOT_DIR, "dist");
 
 const MIN_SCORE = 100;
 const MAX_ENTRIES = 10;
@@ -118,10 +119,10 @@ app.post("/api/score", (req, res) => {
   return res.status(201).json({ ok: true });
 });
 
-app.use(express.static(ROOT_DIR));
+app.use(express.static(DIST_DIR));
 
 app.get(/.*/, (req, res) => {
-  res.sendFile(path.join(ROOT_DIR, "index.html"));
+  res.sendFile(path.join(DIST_DIR, "index.html"));
 });
 
 app.listen(PORT, () => {

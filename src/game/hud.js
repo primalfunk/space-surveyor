@@ -81,6 +81,16 @@ function drawStatIcon(ctx, type, x, y, size, color, glow) {
     ctx.lineTo(-s * 0.55, s * 0.7);
     ctx.closePath();
     ctx.stroke();
+  } else if (type === "armor") {
+    ctx.beginPath();
+    ctx.moveTo(0, -s * 0.7);
+    ctx.lineTo(s * 0.55, -s * 0.15);
+    ctx.lineTo(s * 0.35, s * 0.6);
+    ctx.lineTo(0, s * 0.85);
+    ctx.lineTo(-s * 0.35, s * 0.6);
+    ctx.lineTo(-s * 0.55, -s * 0.15);
+    ctx.closePath();
+    ctx.stroke();
   } else if (type === "time") {
     ctx.beginPath();
     ctx.arc(0, 0, s * 0.6, 0, Math.PI * 2);
@@ -754,13 +764,15 @@ export function drawFuelGauge(ctx, ship, screenW, screenH, isCompact, highlight 
   ctx.restore();
 }
 
-export function drawStatusHud(ctx, ship, lives, surveyed, timeSpent, distanceFromOrigin, resourceCurrency, screenW, screenH, controlLabel = "", isCompact = false) {
+export function drawStatusHud(ctx, ship, lives, armor, maxArmor, surveyed, timeSpent, distanceFromOrigin, resourceCurrency, screenW, screenH, controlLabel = "", isCompact = false) {
   const speed = Math.hypot(ship.vx, ship.vy);
   const distance = Number.isFinite(distanceFromOrigin) ? distanceFromOrigin : 0;
   const resource = Number.isFinite(resourceCurrency) ? Math.max(0, Math.floor(resourceCurrency)) : 0;
+  const armorValue = maxArmor > 0 ? `${armor}/${maxArmor}` : "0";
   const edge = isCompact ? 12 : 18;
   const lines = [
     { icon: "ship", value: lives },
+    { icon: "armor", value: armorValue },
     { icon: "survey", value: surveyed },
     { icon: "time", value: `${timeSpent.toFixed(1)}s` },
     { icon: "distance", value: `${distance.toFixed(0)}u` },
@@ -1375,6 +1387,52 @@ export function drawAlerts(ctx, alerts, alertClock, screenW, screenH) {
     ctx.fillRect(sweepX - flareW / 2, y - flareH / 2, flareW, flareH);
     ctx.restore();
   }
+  ctx.restore();
+}
+
+export function drawTutorialCallout(ctx, callout, screenW, screenH) {
+  if (!callout) {
+    return;
+  }
+  const x = callout.x ?? screenW * 0.5;
+  const y = callout.y ?? screenH * 0.5;
+  const offsetX = callout.offsetX ?? 0;
+  const offsetY = callout.offsetY ?? -90;
+  const labelX = x + offsetX;
+  const labelY = y + offsetY;
+  const time = performance.now();
+  const pulse = 0.6 + 0.4 * Math.sin(time * 0.006);
+  const color = callout.color ?? HUD_COLORS.ACCENT;
+  const glow = callout.glow ?? HUD_COLORS.ACCENT_GLOW;
+  const ringR = callout.ringRadius ?? 16;
+
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.shadowColor = glow;
+  ctx.shadowBlur = 10;
+  ctx.globalAlpha = 0.6 + pulse * 0.3;
+  ctx.beginPath();
+  ctx.moveTo(labelX, labelY);
+  ctx.lineTo(x, y);
+  ctx.stroke();
+
+  const angle = Math.atan2(y - labelY, x - labelX);
+  const headLen = 10;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x - Math.cos(angle - Math.PI / 6) * headLen, y - Math.sin(angle - Math.PI / 6) * headLen);
+  ctx.lineTo(x - Math.cos(angle + Math.PI / 6) * headLen, y - Math.sin(angle + Math.PI / 6) * headLen);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 0.4 + pulse * 0.35;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x, y, ringR, 0, Math.PI * 2);
+  ctx.stroke();
   ctx.restore();
 }
 

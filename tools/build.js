@@ -249,13 +249,17 @@ function main() {
   const bundle = buildGameBundle();
   const assetMap = buildAssetMap();
   const inlinedBundle = inlineAssets(bundle, assetMap);
-  reportUnresolvedAssets("game.js", inlinedBundle);
-  fs.writeFileSync(path.join(DIST_DIR, "game.js"), inlinedBundle, "utf8");
+  reportUnresolvedAssets("game.bundle.js", inlinedBundle);
+  fs.writeFileSync(path.join(DIST_DIR, "game.bundle.js"), inlinedBundle, "utf8");
+  const bootSource = fs.readFileSync(path.join(ROOT, "boot.js"), "utf8");
+  const inlinedBoot = inlineAssets(bootSource, assetMap);
+  reportUnresolvedAssets("boot.js", inlinedBoot);
+  fs.writeFileSync(path.join(DIST_DIR, "boot.js"), inlinedBoot, "utf8");
   const indexHtml = buildIndexHtml();
   const inlinedIndex = inlineAssets(indexHtml, assetMap);
   reportUnresolvedAssets("index.html", inlinedIndex);
   fs.writeFileSync(path.join(DIST_DIR, "index.html"), inlinedIndex, "utf8");
-  console.log("Build complete: dist/index.html, dist/game.js (assets inlined)");
+  console.log("Build complete: dist/index.html, dist/boot.js, dist/game.bundle.js (assets inlined)");
 }
 
 main();

@@ -6,6 +6,7 @@ import { Camera } from "./camera.js";
 import { SectorManager, SECTOR_SIZE, SECTOR_TYPES } from "./sectorManager.js";
 import { computeStarAccelAt, integrate } from "./physics.js";
 import { applyForcesToEntity } from "./forceFields.js";
+import { applyDragToEntity, drawSectorOcclusion, updateSectorOcclusion } from "./sectorModifiers.js";
 import { sounds, music } from "./audio.js";
 import { getSectorMeta, saveSectorIndex, setSectorMeta } from "./sectorIndex.js";
 import { createDefaultGameState, saveGameState } from "./gameState.js";
@@ -14,16 +15,18 @@ import { showUpgradeStationModal } from "../ui/upgradeStationModal.js";
 import { drawRivers } from "./riverRender.js";
 import { getRiversForSector } from "./riverNetwork.js";
 import { getStationInfoForSector, pickStationPosition } from "./stationSystem.js";
-import { createRng } from "./rng.js";
+import { createRng, hashInts } from "./rng.js";
 import { drawMeridianSpine, projectileHitsMeridian, resolveMeridianCollision } from "./meridian.js";
 import { CLUES, CLUE_TOTAL } from "../data/clues.js";
 import {
   ALERT,
+  BEARING,
   HUD_COLORS,
   HUD_FONT,
   MINIMAP,
   drawAutopilotToggle,
   drawAlerts,
+  drawTutorialCallout,
   getAutopilotButtonRect,
   drawBeaconSignalHud,
   drawBearingIndicators,
@@ -144,6 +147,9 @@ const MERIDIAN_SMEAR_ALPHA = Number.isFinite(MERIDIAN_CONFIG.SMEAR_ALPHA)
 const { THRUST_PARTICLES, TRAIL_SPARKS } = EFFECTS;
 const { TOUCH } = INPUT;
 const START_SAFE_RADIUS = SECTOR.START_SAFE_RADIUS;
+const SECTOR_CACHE_RANGE = Number.isFinite(SECTOR.RUNTIME_CACHE_RANGE)
+  ? SECTOR.RUNTIME_CACHE_RANGE
+  : 3;
 const PLAYER_EFFECTIVE_RANGE = BULLET.SPEED * BULLET.LIFE;
 const ENEMY_RANGE_SCALE = ENEMY.RANGE_SCALE;
 const ENEMY_EFFECTIVE_RANGE = PLAYER_EFFECTIVE_RANGE * ENEMY_RANGE_SCALE;
@@ -567,8 +573,9 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
   const originY = startY;
   const ship = new Ship(startX, startY);
   const camera = new Camera(ship);
+  const worldSeed = Number.isFinite(gameState?.worldSeed) ? gameState.worldSeed : 0;
   const sectorManager = new SectorManager({
-    worldSeed: Number.isFinite(gameState?.worldSeed) ? gameState.worldSeed : 0,
+    worldSeed,
     sectorIndex,
     gameState,
     startSafeRadius: START_SAFE_RADIUS,
@@ -643,6 +650,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
   let upgradeLevels = {
     fireRateLevel: 0,
     fireDistanceLevel: 0,
+    scanDistanceLevel: 0,
     hullLevel: 0,
     collectorLevel: 0,
     fuelTankLevel: 0
@@ -653,6 +661,8 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     collectedIds: new Set(),
     selectedVariants: {}
   };
+  let stateDirty = false;
+  let lastStateSave = 0;
   if (gameState) {
     if (Number.isFinite(gameState.resourceCurrency)) {
       resourceCurrency = Math.max(0, Math.floor(gameState.resourceCurrency));
@@ -661,6 +671,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       upgradeLevels = {
         fireRateLevel: Math.max(0, Math.floor(gameState.upgrades.fireRateLevel ?? 0)),
         fireDistanceLevel: Math.max(0, Math.floor(gameState.upgrades.fireDistanceLevel ?? 0)),
+        scanDistanceLevel: Math.max(0, Math.floor(gameState.upgrades.scanDistanceLevel ?? 0)),
         hullLevel: Math.max(0, Math.floor(gameState.upgrades.hullLevel ?? 0)),
         collectorLevel: Math.max(0, Math.floor(gameState.upgrades.collectorLevel ?? 0)),
         fuelTankLevel: Math.max(0, Math.floor(gameState.upgrades.fuelTankLevel ?? 0))
@@ -683,17 +694,89 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
         : {};
     }
   }
+  let zoomLevels = [];
+  let zoomIndex = 0;
+  let zoomMinIndex = 0;
+  let zoomMaxIndex = 0;
+  let baseZoomIndex = 0;
+  let maxScanDistanceLevel = 0;
+  const baseZoom = 1;
+  const baseOutSteps = Number.isFinite(ZOOM.OUT_STEPS_BASE) ? ZOOM.OUT_STEPS_BASE : 3;
+
+  const buildZoomLevels = (base, min, max, step) => {
+    const levels = new Set();
+    const clampedBase = Math.max(min, Math.min(max, base));
+    levels.add(clampedBase);
+    for (let z = clampedBase - step; z > min + 1e-6; z -= step) {
+      levels.add(Number(z.toFixed(4)));
+    }
+    levels.add(min);
+    for (let z = clampedBase + step; z < max - 1e-6; z += step) {
+      levels.add(Number(z.toFixed(4)));
+    }
+    levels.add(max);
+    return Array.from(levels).sort((a, b) => a - b);
+  };
+
+  const findClosestZoomIndex = (levels, target) => {
+    let idx = 0;
+    let best = Infinity;
+    for (let i = 0; i < levels.length; i++) {
+      const diff = Math.abs(levels[i] - target);
+      if (diff < best) {
+        best = diff;
+        idx = i;
+      }
+    }
+    return idx;
+  };
+
+  const clampZoomIndex = (index) => Math.min(zoomMaxIndex, Math.max(zoomMinIndex, index));
+
+  const setZoomIndex = (index) => {
+    zoomIndex = clampZoomIndex(index);
+    if (zoomLevels[zoomIndex]) {
+      camera.zoom = zoomLevels[zoomIndex];
+    }
+  };
+
+  const updateZoomBounds = () => {
+    const maxZoomOutSteps = baseZoomIndex;
+    const allowedOutSteps = Math.min(baseOutSteps + upgradeLevels.scanDistanceLevel, maxZoomOutSteps);
+    zoomMinIndex = Math.max(0, baseZoomIndex - allowedOutSteps);
+    setZoomIndex(zoomIndex);
+  };
+
+  const initZoomLevels = () => {
+    zoomLevels = buildZoomLevels(baseZoom, ZOOM.MIN, ZOOM.MAX, ZOOM.WHEEL_STEP);
+    zoomMaxIndex = zoomLevels.length - 1;
+    baseZoomIndex = findClosestZoomIndex(zoomLevels, baseZoom);
+    const maxZoomOutSteps = baseZoomIndex;
+    maxScanDistanceLevel = Math.max(0, maxZoomOutSteps - baseOutSteps);
+    upgradeLevels.scanDistanceLevel = Math.min(upgradeLevels.scanDistanceLevel, maxScanDistanceLevel);
+    zoomIndex = baseZoomIndex;
+    updateZoomBounds();
+  };
   normalizeOrderedClues();
+  ensureClueVariantsSelected();
+  initZoomLevels();
   let maxLives = getMaxLives(upgradeLevels.hullLevel);
   let lives = maxLives;
+  let maxArmor = getMaxArmor(upgradeLevels.hullLevel);
+  let armor = maxArmor;
+  if (gameState && Number.isFinite(gameState.armor)) {
+    armor = Math.max(0, Math.min(maxArmor, Math.floor(gameState.armor)));
+  }
   let maxFuel = getMaxFuel(upgradeLevels.fuelTankLevel);
   ship.maxFuel = maxFuel;
   ship.fuel = ship.maxFuel;
   if (gameState) {
     gameState.resourceCurrency = resourceCurrency;
+    gameState.armor = armor;
     gameState.upgrades = {
       fireRateLevel: upgradeLevels.fireRateLevel,
       fireDistanceLevel: upgradeLevels.fireDistanceLevel,
+      scanDistanceLevel: upgradeLevels.scanDistanceLevel,
       hullLevel: upgradeLevels.hullLevel,
       collectorLevel: upgradeLevels.collectorLevel,
       fuelTankLevel: upgradeLevels.fuelTankLevel
@@ -752,6 +835,20 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       river: 0
     }
   };
+  const tutorial = {
+    active: true,
+    stepIndex: 0,
+    stepStarted: false,
+    stepStartedAt: 0,
+    chevronTimer: 0,
+    flags: {
+      aimed: false,
+      fired: false,
+      thrusted: false,
+      looted: false,
+      chevrons: false
+    }
+  };
   let shakeTime = 0;
   let shakeDuration = 0;
   let shakeStrength = 0;
@@ -767,8 +864,6 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
   let wasInBeaconZone = false;
   let wasInActiveMotif = false;
   let beaconScanPenalty = 0;
-  let stateDirty = false;
-  let lastStateSave = 0;
   let calibrationScore = 0;
   let gateSpawnTimer = randomRange(CALIBRATION_GATE.SPAWN_MIN, CALIBRATION_GATE.SPAWN_MAX);
   let activeGates = [];
@@ -804,12 +899,17 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     hasMoved: false
   };
   const touch = {
-    moveId: null,
+    aimId: null,
+    thrustId: null,
     fireId: null,
-    moveStartX: 0,
-    moveStartY: 0,
-    moveX: 0,
-    moveY: 0,
+    aimX: 0,
+    aimY: 0,
+    thrustStartX: 0,
+    thrustStartY: 0,
+    thrustX: 0,
+    thrustY: 0,
+    lastAimAngle: null,
+    touches: new Map(),
     isActive: false
   };
   let interactButton = null;
@@ -831,6 +931,9 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     mouse.x = (event.clientX - rect.left) * scaleX;
     mouse.y = (event.clientY - rect.top) * scaleY;
     mouse.hasMoved = true;
+    if (!touch.isActive) {
+      touch.lastAimAngle = null;
+    }
   };
   const getAutopilotRectScreen = () => {
     if (autopilotButtonRect) {
@@ -892,7 +995,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       return;
     }
     event.preventDefault();
-    wheelZoomStep += (event.deltaY > 0 ? -1 : 1) * ZOOM.WHEEL_STEP;
+    wheelZoomStep += event.deltaY > 0 ? -1 : 1;
   };
   const getTouchPosition = (touchEvent) => {
     const rect = canvas.getBoundingClientRect();
@@ -902,6 +1005,55 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       x: (touchEvent.clientX - rect.left) * scaleX,
       y: (touchEvent.clientY - rect.top) * scaleY
     };
+  };
+  const getTouchButtonRadius = (kind) => {
+    const minDim = Math.min(canvas.width, canvas.height);
+    if (kind === "thrust") {
+      const min = Number.isFinite(TOUCH.THRUST_RADIUS_MIN) ? TOUCH.THRUST_RADIUS_MIN : 15;
+      const max = Number.isFinite(TOUCH.THRUST_RADIUS_MAX) ? TOUCH.THRUST_RADIUS_MAX : 30;
+      const scale = Number.isFinite(TOUCH.THRUST_RADIUS_SCALE) ? TOUCH.THRUST_RADIUS_SCALE : 0.04;
+      return Math.min(max, Math.max(min, minDim * scale));
+    }
+    const min = Number.isFinite(TOUCH.FIRE_RADIUS_MIN) ? TOUCH.FIRE_RADIUS_MIN : 15;
+    const max = Number.isFinite(TOUCH.FIRE_RADIUS_MAX) ? TOUCH.FIRE_RADIUS_MAX : 30;
+    const scale = Number.isFinite(TOUCH.FIRE_RADIUS_SCALE) ? TOUCH.FIRE_RADIUS_SCALE : 0.04;
+    return Math.min(max, Math.max(min, minDim * scale));
+  };
+  const isInCircle = (pos, cx, cy, radius) => {
+    const dx = pos.x - cx;
+    const dy = pos.y - cy;
+    return dx * dx + dy * dy <= radius * radius;
+  };
+  const isInThrustZone = (pos) => {
+    const centerX = canvas.width * (TOUCH.THRUST_HINT_X ?? 0.18);
+    const centerY = canvas.height * (TOUCH.THRUST_HINT_Y ?? 0.78);
+    const radius = getTouchButtonRadius("thrust");
+    return isInCircle(pos, centerX, centerY, radius);
+  };
+  const isInFireZone = (pos) => {
+    const centerX = canvas.width * (TOUCH.FIRE_BUTTON_X ?? 0.82);
+    const centerY = canvas.height * (TOUCH.FIRE_BUTTON_Y ?? 0.78);
+    const radius = getTouchButtonRadius("fire");
+    return isInCircle(pos, centerX, centerY, radius);
+  };
+  const assignAimTouch = () => {
+    if (touch.aimId !== null) {
+      return;
+    }
+    let candidate = null;
+    for (const [id, data] of touch.touches.entries()) {
+      if (data.role !== "aim") {
+        continue;
+      }
+      if (!candidate || data.startTime < candidate.startTime) {
+        candidate = { id, data };
+      }
+    }
+    if (candidate) {
+      touch.aimId = candidate.id;
+      touch.aimX = candidate.data.x;
+      touch.aimY = candidate.data.y;
+    }
   };
   const getPinchDistance = (touches) => {
     if (!touches || touches.length < 2) {
@@ -923,7 +1075,8 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     const dist = getPinchDistance(touches);
     const ratio = dist / pinch.startDist;
     const target = pinch.startZoom * ratio;
-    camera.zoom = Math.max(ZOOM.MIN, Math.min(ZOOM.MAX, target));
+    const nextIndex = findClosestZoomIndex(zoomLevels, target);
+    setZoomIndex(nextIndex);
   };
   const endPinch = (touches) => {
     if (!touches || touches.length < 2) {
@@ -937,32 +1090,60 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       if (tryToggleAutopilot(pos.x, pos.y)) {
         continue;
       }
-      if (pos.x <= canvas.width * TOUCH.MOVE_ZONE && touch.moveId === null) {
-        touch.moveId = t.identifier;
-        touch.moveStartX = pos.x;
-        touch.moveStartY = pos.y;
-        touch.moveX = pos.x;
-        touch.moveY = pos.y;
-        touch.isActive = true;
-      } else if (touch.fireId === null) {
+      let role = "aim";
+      if (isInFireZone(pos) && touch.fireId === null) {
+        role = "fire";
         touch.fireId = t.identifier;
-        touch.isActive = true;
+      } else if (isInThrustZone(pos) && touch.thrustId === null) {
+        role = "thrust";
+        touch.thrustId = t.identifier;
+        touch.thrustStartX = pos.x;
+        touch.thrustStartY = pos.y;
+        touch.thrustX = pos.x;
+        touch.thrustY = pos.y;
+      }
+      touch.touches.set(t.identifier, {
+        role,
+        x: pos.x,
+        y: pos.y,
+        startX: pos.x,
+        startY: pos.y,
+        startTime: performance.now()
+      });
+      if (role === "aim" && touch.aimId === null) {
+        touch.aimId = t.identifier;
+        touch.aimX = pos.x;
+        touch.aimY = pos.y;
       }
     }
-    if (!pinch.active && event.touches.length >= 2) {
+    touch.isActive = touch.touches.size > 0;
+    if (touch.isActive) {
+      mouse.hasMoved = false;
+    }
+    if (TOUCH.PINCH_ENABLED && !touch.thrustId && !touch.fireId && !pinch.active && event.touches.length >= 2) {
       startPinch(event.touches);
     }
   };
   const onTouchMove = (event) => {
     event.preventDefault();
     for (const t of event.changedTouches) {
-      if (t.identifier === touch.moveId) {
-        const pos = getTouchPosition(t);
-        touch.moveX = pos.x;
-        touch.moveY = pos.y;
+      const data = touch.touches.get(t.identifier);
+      if (!data) {
+        continue;
+      }
+      const pos = getTouchPosition(t);
+      data.x = pos.x;
+      data.y = pos.y;
+      if (data.role === "thrust" && t.identifier === touch.thrustId) {
+        touch.thrustX = pos.x;
+        touch.thrustY = pos.y;
+      }
+      if (data.role === "aim" && t.identifier === touch.aimId) {
+        touch.aimX = pos.x;
+        touch.aimY = pos.y;
       }
     }
-    if (event.touches.length >= 2) {
+    if (TOUCH.PINCH_ENABLED && !touch.thrustId && !touch.fireId && event.touches.length >= 2) {
       if (!pinch.active) {
         startPinch(event.touches);
       }
@@ -972,16 +1153,25 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
   const onTouchEnd = (event) => {
     event.preventDefault();
     for (const t of event.changedTouches) {
-      if (t.identifier === touch.moveId) {
-        touch.moveId = null;
-      } else if (t.identifier === touch.fireId) {
+      const data = touch.touches.get(t.identifier);
+      if (data) {
+        touch.touches.delete(t.identifier);
+      }
+      if (t.identifier === touch.thrustId) {
+        touch.thrustId = null;
+      }
+      if (t.identifier === touch.fireId) {
         touch.fireId = null;
       }
+      if (t.identifier === touch.aimId) {
+        touch.aimId = null;
+      }
     }
-    if (touch.moveId === null && touch.fireId === null) {
-      touch.isActive = false;
+    assignAimTouch();
+    touch.isActive = touch.touches.size > 0;
+    if (!TOUCH.PINCH_ENABLED || event.touches.length < 2) {
+      endPinch(event.touches);
     }
-    endPinch(event.touches);
   };
   window.addEventListener("mousemove", onMouseMove);
   window.addEventListener("mousedown", onMouseDown);
@@ -1064,6 +1254,11 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     ship.vy = 0;
     ship.heading = 0;
     ship.fuel = ship.maxFuel;
+    armor = maxArmor;
+    if (gameState) {
+      gameState.armor = armor;
+      markStateDirty();
+    }
     lastTrailX = null;
     lastTrailY = null;
     trail.length = 0;
@@ -1115,13 +1310,24 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
 
   function syncUpgradeState() {
     maxLives = getMaxLives(upgradeLevels.hullLevel);
+    const prevMaxArmor = maxArmor;
+    maxArmor = getMaxArmor(upgradeLevels.hullLevel);
+    if (maxArmor > prevMaxArmor) {
+      armor = Math.min(maxArmor, armor + (maxArmor - prevMaxArmor));
+    } else {
+      armor = Math.min(armor, maxArmor);
+    }
     maxFuel = getMaxFuel(upgradeLevels.fuelTankLevel);
     ship.maxFuel = maxFuel;
     ship.fuel = Math.min(ship.fuel, ship.maxFuel);
+    upgradeLevels.scanDistanceLevel = Math.min(upgradeLevels.scanDistanceLevel, maxScanDistanceLevel);
+    updateZoomBounds();
     if (gameState) {
+      gameState.armor = armor;
       gameState.upgrades = {
         fireRateLevel: upgradeLevels.fireRateLevel,
         fireDistanceLevel: upgradeLevels.fireDistanceLevel,
+        scanDistanceLevel: upgradeLevels.scanDistanceLevel,
         hullLevel: upgradeLevels.hullLevel,
         collectorLevel: upgradeLevels.collectorLevel,
         fuelTankLevel: upgradeLevels.fuelTankLevel
@@ -1132,18 +1338,22 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
 
   function buildUpgradeUiState(station) {
     const tierCap = Number.isFinite(station?.tierCap) ? station.tierCap : null;
-    const missingLives = Math.max(0, maxLives - lives);
+    const missingArmor = Math.max(0, maxArmor - armor);
     const missingFuel = Math.max(0, maxFuel - ship.fuel);
+    const scanMaxed = upgradeLevels.scanDistanceLevel >= maxScanDistanceLevel;
     return {
       currency: resourceCurrency,
       lives,
       maxLives,
+      armor,
+      maxArmor,
       fuel: ship.fuel,
       maxFuel,
       tierCap,
       upgrades: {
         fireRateLevel: upgradeLevels.fireRateLevel,
         fireDistanceLevel: upgradeLevels.fireDistanceLevel,
+        scanDistanceLevel: upgradeLevels.scanDistanceLevel,
         hullLevel: upgradeLevels.hullLevel,
         collectorLevel: upgradeLevels.collectorLevel,
         fuelTankLevel: upgradeLevels.fuelTankLevel
@@ -1151,21 +1361,25 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       gains: {
         fireRate: formatGain(getFireRateGain(upgradeLevels.fireRateLevel), " ms", 0),
         fireDistance: formatGain(getFireDistanceGain(upgradeLevels.fireDistanceLevel), " u", 0),
-        hull: formatGain(getHullGain(upgradeLevels.hullLevel), " life", 0),
+        scanDistance: scanMaxed ? "Max reached" : "+1 zoom step",
+        hull: formatGain(getHullGain(upgradeLevels.hullLevel), " armor", 0),
         collector: getCollectorGain(upgradeLevels.collectorLevel),
         fuelTank: formatGain(getFuelGain(upgradeLevels.fuelTankLevel), " fuel", 0)
       },
       costs: {
         fireRate: getUpgradeCost(UPGRADES.FIRE_RATE.baseCost, UPGRADES.FIRE_RATE.costGrowth, upgradeLevels.fireRateLevel),
         fireDistance: getUpgradeCost(UPGRADES.FIRE_DISTANCE.baseCost, UPGRADES.FIRE_DISTANCE.costGrowth, upgradeLevels.fireDistanceLevel),
+        scanDistance: scanMaxed
+          ? null
+          : getUpgradeCost(UPGRADES.SCAN_DISTANCE.baseCost, UPGRADES.SCAN_DISTANCE.costGrowth, upgradeLevels.scanDistanceLevel),
         fuelTank: getUpgradeCost(UPGRADES.FUEL_TANK.baseCost, UPGRADES.FUEL_TANK.costGrowth, upgradeLevels.fuelTankLevel),
         hull: getUpgradeCost(UPGRADES.HULL.baseCost, UPGRADES.HULL.costGrowth, upgradeLevels.hullLevel),
         collector: getUpgradeCost(UPGRADES.COLLECTOR.baseCost, UPGRADES.COLLECTOR.costGrowth, upgradeLevels.collectorLevel),
         refuel: missingFuel > 0
           ? Math.max(1, Math.ceil(missingFuel * UPGRADES.REFUEL.costPerFuel))
           : null,
-        repair: missingLives > 0
-          ? Math.round(UPGRADES.REPAIR.baseCost + missingLives * UPGRADES.REPAIR.costPerLife)
+        repair: missingArmor > 0
+          ? Math.round(UPGRADES.REPAIR.baseCost + missingArmor * UPGRADES.REPAIR.costPerArmor)
           : null
       }
     };
@@ -1205,6 +1419,12 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
           syncUpgradeState();
           sounds.play("bought");
         }
+      } else if (action === "scanDistance" && state.costs.scanDistance !== null) {
+        if (spendResource(state.costs.scanDistance)) {
+          upgradeLevels.scanDistanceLevel += 1;
+          syncUpgradeState();
+          sounds.play("bought");
+        }
       } else if (action === "fuelTank" && state.costs.fuelTank !== null) {
         if (spendResource(state.costs.fuelTank)) {
           upgradeLevels.fuelTankLevel += 1;
@@ -1230,7 +1450,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
         }
       } else if (action === "repair" && state.costs.repair !== null) {
         if (spendResource(state.costs.repair)) {
-          lives = maxLives;
+          armor = maxArmor;
           syncUpgradeState();
           sounds.play("bought");
         }
@@ -1248,10 +1468,13 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
   }
 
   function queueAlert(text, delay = 0, duration = ALERT.DURATION, force = false, options = {}) {
+    const kind = options.kind ?? "system";
+    if (tutorial.active && kind !== "tutorial") {
+      return;
+    }
     if (intro.suppressAlerts && !force) {
       return;
     }
-    const kind = options.kind ?? "system";
     let start = alertClock + delay;
     const end = start + duration;
     if (kind !== "clue") {
@@ -1311,6 +1534,9 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
   }
 
   function scheduleIntroAlert(id, text, options = {}) {
+    if (tutorial.active) {
+      return;
+    }
     if (!intro.enabled || intro.flags[id]) {
       return;
     }
@@ -1329,6 +1555,186 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     }
     if (typeof options.onScheduled === "function") {
       options.onScheduled();
+    }
+  }
+
+  const tutorialSteps = [
+    {
+      id: "aim",
+      text: "Touch or move the mouse around the ship to change its facing.",
+      isComplete: () => tutorial.flags.aimed
+    },
+    {
+      id: "fire",
+      text: "Left click / left tap to fire.",
+      isComplete: () => tutorial.flags.fired
+    },
+    {
+      id: "thrust",
+      text: "Right click / right tap to thrust in the direction you face. Thrust consumes fuel.",
+      isComplete: () => tutorial.flags.thrusted
+    },
+    {
+      id: "loot",
+      text: "Shoot asteroids to find resources and fuel.",
+      isComplete: () => tutorial.flags.looted
+    },
+    {
+      id: "chevrons",
+      text: "Green chevrons point toward mysteries.",
+      isComplete: () => tutorial.flags.chevrons
+    }
+  ];
+
+  const startTutorialStep = () => {
+    const step = tutorialSteps[tutorial.stepIndex];
+    if (!step) {
+      return;
+    }
+    tutorial.stepStarted = true;
+    tutorial.stepStartedAt = alertClock;
+    queueAlert(step.text, 0, ALERT.DURATION * 1.2, true, {
+      kind: "tutorial",
+      textColor: CLUE_CONFIG?.TUTORIAL_COLOR ?? null
+    });
+  };
+
+  const advanceTutorial = () => {
+    tutorial.stepIndex += 1;
+    tutorial.stepStarted = false;
+    tutorial.stepStartedAt = alertClock;
+    if (tutorial.stepIndex >= tutorialSteps.length) {
+      tutorial.active = false;
+      intro.suppressAlerts = false;
+      intro.nextAt = Math.max(intro.nextAt ?? 0, alertClock + 0.4);
+    }
+  };
+
+  const updateTutorial = () => {
+    if (!tutorial.active) {
+      return;
+    }
+    intro.suppressAlerts = true;
+    const step = tutorialSteps[tutorial.stepIndex];
+    if (!step) {
+      tutorial.active = false;
+      intro.suppressAlerts = false;
+      return;
+    }
+    if (!tutorial.stepStarted) {
+      startTutorialStep();
+    }
+    if (step.isComplete()) {
+      advanceTutorial();
+    }
+  };
+
+  function getTutorialCallout(screenW, screenH, hudScale, isCompactHud) {
+    if (!tutorial.active) {
+      return null;
+    }
+    const step = tutorialSteps[tutorial.stepIndex];
+    if (!step) {
+      return null;
+    }
+    const shipX = screenW / 2;
+    const shipY = screenH / 2;
+    const showTouchHints = touch.isActive
+      || (TOUCH.SHOW_HINTS && (screenW < 900 || screenH < 700));
+    const minDim = Math.min(screenW, screenH);
+
+    const touchThrustRadius = Math.min(
+      TOUCH.THRUST_RADIUS_MAX,
+      Math.max(TOUCH.THRUST_RADIUS_MIN, minDim * (TOUCH.THRUST_RADIUS_SCALE ?? 0.16))
+    );
+    const touchThrustX = screenW * (TOUCH.THRUST_HINT_X ?? 0.18);
+    const touchThrustY = screenH * (TOUCH.THRUST_HINT_Y ?? 0.78);
+
+    const touchFireRadius = Math.min(
+      TOUCH.FIRE_RADIUS_MAX,
+      Math.max(TOUCH.FIRE_RADIUS_MIN, minDim * (TOUCH.FIRE_RADIUS_SCALE ?? 0.08))
+    );
+    const touchFireX = screenW * (TOUCH.FIRE_BUTTON_X ?? 0.82);
+    const touchFireY = screenH * (TOUCH.FIRE_BUTTON_Y ?? 0.78);
+
+    const hudW = screenW / hudScale;
+    const hudH = screenH / hudScale;
+    const edge = isCompactHud ? 12 : 20;
+    const basePanelW = Math.min(isCompactHud ? 260 : 320, hudW - edge * 2);
+    const panelW = basePanelW * 0.8;
+    const panelH = isCompactHud ? 70 : 78;
+    const fuelX = (edge + panelW * 0.5) * hudScale;
+    const fuelY = (hudH - panelH - (isCompactHud ? 10 : 16) + panelH * 0.5) * hudScale;
+
+    const findAsteroidTarget = () => {
+      let best = null;
+      let bestDist = Infinity;
+      const margin = 50;
+      for (const activeSector of activeSectors) {
+        for (const asteroid of activeSector.asteroids) {
+          const dx = asteroid.x - ship.x;
+          const dy = asteroid.y - ship.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist >= bestDist) {
+            continue;
+          }
+          const screenPos = worldToScreen(asteroid.x, asteroid.y, ship, camera, canvas);
+          if (screenPos.x < -margin || screenPos.x > screenW + margin) {
+            continue;
+          }
+          if (screenPos.y < -margin || screenPos.y > screenH + margin) {
+            continue;
+          }
+          bestDist = dist;
+          best = {
+            x: screenPos.x,
+            y: screenPos.y,
+            ringRadius: Math.max(12, (asteroid.radius ?? 14) * camera.zoom * 0.85)
+          };
+        }
+      }
+      return best;
+    };
+
+    switch (step.id) {
+      case "aim":
+        return { x: shipX, y: shipY, offsetY: -120, ringRadius: 18 };
+      case "fire":
+        if (showTouchHints) {
+          return {
+            x: touchFireX,
+            y: touchFireY,
+            offsetX: -70,
+            offsetY: -90,
+            ringRadius: touchFireRadius * 0.9
+          };
+        }
+        return { x: shipX, y: shipY, offsetX: 90, offsetY: -80, ringRadius: 18 };
+      case "thrust":
+        if (showTouchHints) {
+          return {
+            x: touchThrustX,
+            y: touchThrustY,
+            offsetX: 70,
+            offsetY: -90,
+            ringRadius: touchThrustRadius * 0.9
+          };
+        }
+        return { x: fuelX, y: fuelY, offsetX: 90, offsetY: -90, ringRadius: 20 };
+      case "loot": {
+        const target = findAsteroidTarget();
+        return target ?? { x: shipX, y: shipY, offsetY: -120, ringRadius: 18 };
+      }
+      case "chevrons":
+        return {
+          x: shipX + (BEARING.RADIUS * hudScale),
+          y: shipY,
+          offsetX: -70,
+          offsetY: -90,
+          ringRadius: 14
+        };
+      default:
+        return { x: shipX, y: shipY, offsetY: -120, ringRadius: 18 };
     }
   }
 
@@ -1409,9 +1815,15 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
 
   function getMaxLives(level) {
     const effect = UPGRADES.HULL.effect;
-    const model = effect.extraLivesModel;
-    const extra = getQuantizedEffect(model.maxEffect, model.effectStep, model.curveK, level);
-    return effect.maxLivesBase + extra;
+    return effect.maxLivesBase;
+  }
+
+  function getMaxArmor(level) {
+    const effect = UPGRADES.HULL.effect;
+    const base = Number.isFinite(effect.armorBase) ? effect.armorBase : 0;
+    const cap = Number.isFinite(effect.armorMax) ? effect.armorMax : 0;
+    const next = base + Math.max(0, level);
+    return Math.max(0, Math.min(cap, next));
   }
 
   function getMaxFuel(level) {
@@ -1495,15 +1907,38 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     return null;
   }
 
+  function pickVariantIndex(clueId, variants) {
+    if (variants.length === 0) {
+      return 0;
+    }
+    const seed = hashInts(worldSeed, clueId, 8117);
+    const rng = createRng(seed);
+    return Math.floor(rng() * variants.length);
+  }
+
+  function ensureClueVariantsSelected() {
+    let changed = false;
+    for (let id = 1; id <= CLUE_TOTAL; id++) {
+      const clue = CLUE_LOOKUP.get(id);
+      const variants = Array.isArray(clue?.variants) ? clue.variants : [];
+      const stored = clueState.selectedVariants[id];
+      if (Number.isFinite(stored) && variants[stored]) {
+        continue;
+      }
+      clueState.selectedVariants[id] = pickVariantIndex(id, variants);
+      changed = true;
+    }
+    if (changed) {
+      syncClueState();
+    }
+  }
+
   function selectVariantIndex(clueId, variants) {
     const stored = clueState.selectedVariants[clueId];
     if (Number.isFinite(stored) && variants[stored]) {
       return stored;
     }
-    if (variants.length === 0) {
-      return 0;
-    }
-    const idx = Math.floor(Math.random() * variants.length);
+    const idx = pickVariantIndex(clueId, variants);
     clueState.selectedVariants[clueId] = idx;
     return idx;
   }
@@ -1580,8 +2015,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
   }
 
   function getHullGain(level) {
-    const model = UPGRADES.HULL.effect.extraLivesModel;
-    return getDeltaEffect(model.maxEffect, model.effectStep, model.curveK, level + 1);
+    return Math.max(0, getMaxArmor(level + 1) - getMaxArmor(level));
   }
 
   function getFuelGain(level) {
@@ -2033,6 +2467,27 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       }
     }
     return null;
+  }
+
+  function objectHitsStar(body, radius, stars, includeSingularity = true) {
+    if (!Array.isArray(stars) || !body) {
+      return false;
+    }
+    const bodyRadius = Number.isFinite(radius) ? radius : 0;
+    for (const star of stars) {
+      if (!star || !Number.isFinite(star.radius)) {
+        continue;
+      }
+      if (!includeSingularity && star.special?.type === "singularity") {
+        continue;
+      }
+      const dx = body.x - star.x;
+      const dy = body.y - star.y;
+      if (Math.hypot(dx, dy) < star.radius + bodyRadius) {
+        return true;
+      }
+    }
+    return false;
   }
 
   function drawCollectorField(ctx, radius) {
@@ -3329,6 +3784,28 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     pauseForLifeLoss("respawn");
   }
 
+  function handleShipHit(explosionType) {
+    if (demoMode) {
+      handleLifeLoss(explosionType);
+      return;
+    }
+    if (invulnTimer > 0 || !shipVisible) {
+      return;
+    }
+    if (armor > 0) {
+      armor = Math.max(0, armor - 1);
+      invulnTimer = INVULN_DURATION;
+      triggerShake(SHAKE.HIT);
+      sounds.play("lost_life");
+      if (gameState) {
+        gameState.armor = armor;
+        markStateDirty();
+      }
+      return;
+    }
+    handleLifeLoss(explosionType);
+  }
+
   function pushLimited(list, entry, max) {
     if (!Array.isArray(list)) {
       return;
@@ -3854,11 +4331,11 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     }
 
     if (!intro.flags.systems && intro.clock >= INTRO.START_DELAY) {
-      scheduleIntroAlert("systems", "Systems online. Survey and exit freely.");
+      scheduleIntroAlert("systems", "There were once signs of life in this galaxy.");
     }
 
     if (!intro.flags.goals && intro.controlUsed) {
-      scheduleIntroAlert("goals", "Lore points reveal clues and increase score.", {
+      scheduleIntroAlert("goals", "Find the clues to unravel the mystery of what became of them.", {
         highlightKeys: ["goal", "exit"],
         highlightDuration: INTRO.HIGHLIGHT_DURATION
       });
@@ -3892,7 +4369,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     if (!intro.flags.rivers) {
       const riverInfo = getClosestRiverInfo(ship, sector?.runtimeRivers ?? []);
       if (riverInfo && riverInfo.dist < (riverInfo.width / 2)) {
-        scheduleIntroAlert("rivers", "Currents shape motion. Ride them.", {
+        scheduleIntroAlert("rivers", "Currents shape the motion of the skies.", {
           highlightKeys: ["river"],
           highlightDuration: INTRO.RIVER_HIGHLIGHT_DURATION
         });
@@ -3903,12 +4380,12 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       const accel = starAccel ?? computeStarAccelAt(ship, activeStars, CONFIG);
       const accelMag = Math.hypot(accel.ax, accel.ay);
       if (accelMag >= INTRO.STAR_PULL_ACCEL) {
-        scheduleIntroAlert("stars", "Stars bend paths. Respect their pull.");
+        scheduleIntroAlert("stars", "Stars bend paths. Disdain their power at your peril.");
       }
     }
 
     if (!intro.flags.distance && intro.sectorTransitions >= INTRO.LONGRUN_TRANSITIONS) {
-      scheduleIntroAlert("distance", "Distance is remembered.", {
+      scheduleIntroAlert("distance", "Space is endless and without limit, but it is far from featureless.", {
         highlightKeys: ["score"],
         highlightDuration: INTRO.HIGHLIGHT_DURATION,
         releaseAlerts: true
@@ -3916,16 +4393,16 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     }
 
     if (!intro.flags.anomaly && sector?.sectorType === SECTOR_TYPES.ANOMALY) {
-      scheduleIntroAlert("anomaly", "Not everything here is inert.");
+      scheduleIntroAlert("anomaly", "Sometimes things are strange because they were made that way.");
     }
     if (!intro.flags.echo && sector?.sectorType === SECTOR_TYPES.ECHO) {
-      scheduleIntroAlert("echo", "Not everything here is inert.");
+      scheduleIntroAlert("echo", "The stars whisper to each other. Can you hear them?");
     }
     if (!intro.flags.movingStars && Array.isArray(activeStars) && activeStars.some((star) => star.motion)) {
-      scheduleIntroAlert("movingStars", "Not everything here is inert.");
+      scheduleIntroAlert("movingStars", "Even stars cannot always hold still.");
     }
     if (!intro.flags.station && sector?.station) {
-      scheduleIntroAlert("station", "Not everything here is inert.");
+      scheduleIntroAlert("station", "Sometimes in the cold vacuum, there is help.");
     }
   }
 
@@ -3962,6 +4439,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     updateParticles(particles, dt);
     updateEnemyPings(enemyPings, dt);
     updateAlerts(dt);
+    updateTutorial();
     updateScorePopups(dt);
     updateShake(dt);
     updateBackgroundEvents(dt);
@@ -4018,8 +4496,9 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     let keyboardThrustInput = 0;
     let shipInSafeZone = false;
     let shipFullyInsideSafeZone = false;
+    const touchBlocksMouseAim = touch.isActive || touch.lastAimAngle !== null;
     if (!inputBlocked && !autopilotEngaged) {
-      if (mouseAimEnabled && mouse.hasMoved) {
+      if (!touchBlocksMouseAim && mouseAimEnabled && mouse.hasMoved) {
         const centerX = canvas.width / 2 + camera.shakeX;
         const centerY = canvas.height / 2 + camera.shakeY;
         const worldX = (mouse.x - centerX) / camera.zoom + ship.x;
@@ -4035,22 +4514,23 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
           externalInput.thrustInput = 1;
         }
       }
-      if (touch.moveId !== null) {
-        const dx = touch.moveX - touch.moveStartX;
-        const dy = touch.moveY - touch.moveStartY;
-        const dist = Math.hypot(dx, dy);
-        const maxRadius = Math.min(
-          TOUCH.MAX_RADIUS_MAX,
-          Math.max(TOUCH.MAX_RADIUS_MIN, Math.min(canvas.width, canvas.height) * 0.16)
-        );
-        if (dist > TOUCH.DEADZONE && keyboardRotationInput === 0) {
+      if (touch.aimId !== null) {
+        const centerX = canvas.width / 2 + camera.shakeX;
+        const centerY = canvas.height / 2 + camera.shakeY;
+        const dx = touch.aimX - centerX;
+        const dy = touch.aimY - centerY;
+        if (Math.hypot(dx, dy) > 0.001 && keyboardRotationInput === 0) {
           externalInput = externalInput || {};
           externalInput.aimAngle = Math.atan2(dx, -dy);
+          touch.lastAimAngle = externalInput.aimAngle;
         }
-        if (dist > TOUCH.DEADZONE && keyboardThrustInput === 0) {
-          externalInput = externalInput || {};
-          externalInput.thrustInput = Math.min(1, dist / maxRadius);
-        }
+      } else if (touch.lastAimAngle !== null && keyboardRotationInput === 0) {
+        externalInput = externalInput || {};
+        externalInput.aimAngle = touch.lastAimAngle;
+      }
+      if (touch.thrustId !== null && keyboardThrustInput === 0) {
+        externalInput = externalInput || {};
+        externalInput.thrustInput = 1;
       }
     }
       if (autopilotEngaged) {
@@ -4078,6 +4558,15 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
           intro.controlUsed = true;
         }
       }
+      if (tutorial.active && !inputBlocked && !autopilotEngaged) {
+        if (keyboardRotationInput !== 0 || Number.isFinite(externalInput?.aimAngle)
+          || mouse.hasMoved || touch.aimId !== null || touch.lastAimAngle !== null) {
+          tutorial.flags.aimed = true;
+        }
+        if (keyboardThrustInput !== 0 || externalInput?.thrustInput) {
+          tutorial.flags.thrusted = true;
+        }
+      }
       ship.update(dt, externalInput);
     applyGateCorrection(dt);
     spawnThrustParticles(dt);
@@ -4100,11 +4589,30 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     for (const activeSector of activeSectors) {
       const shipPos = activeSector === sector ? { x: ship.x, y: ship.y } : null;
       updateSectorRivers(activeSector, shipPos);
+      updateSectorOcclusion(activeSector, dt);
     }
+    sectorManager.pruneOutsideRange(
+      Math.floor(ship.x / SECTOR_SIZE),
+      Math.floor(ship.y / SECTOR_SIZE),
+      SECTOR_CACHE_RANGE
+    );
     stationMarkers = updateStationDiscovery();
     const activeStations = getActiveStations();
-    updateBullets(bullets, dt, activeStations);
-    updateEnemyBullets(enemyBullets, enemies, ship, SHIP_RADIUS, invulnTimer, shipVisible, handleLifeLoss, dt, activeStations);
+    const activeStars = activeSectors.flatMap((s) => s.stars);
+    updateBullets(bullets, dt, activeSectors, activeStars, activeStations);
+    updateEnemyBullets(
+      enemyBullets,
+      enemies,
+      ship,
+      SHIP_RADIUS,
+      invulnTimer,
+      shipVisible,
+      handleShipHit,
+      dt,
+      activeSectors,
+      activeStars,
+      activeStations
+    );
       for (const activeSector of activeSectors) {
         if (activeSector.apseInterior && typeof activeSector.apseInterior.absorbProjectiles === "function") {
           activeSector.apseInterior.absorbProjectiles(bullets);
@@ -4286,7 +4794,6 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     wasInBeaconZone = inBeaconZone;
     wasInActiveMotif = isActiveMotif(beaconSignal.motif);
 
-    const activeStars = activeSectors.flatMap((s) => s.stars);
     const palimpsestFragments = collectPalimpsestFragments(activeSectors);
     const palimpsestSingularities = collectPalimpsestSingularities(activeStars);
     const needsStarAccelForIntro = intro.enabled
@@ -4376,6 +4883,7 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
         ship.vy = 0;
       } else {
         applyForcesToEntity(ship, dt, activeStars, shipRivers, CONFIG);
+        applyDragToEntity(ship, sector, dt);
         if (autopilotEngaged && AUTOPILOT.SPEED_MAX > 0) {
           const speed = Math.hypot(ship.vx, ship.vy);
           if (speed > AUTOPILOT.SPEED_MAX) {
@@ -4411,11 +4919,16 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
           asteroid.update(dt);
         }
         applyForcesToEntity(asteroid, dt, activeStars, activeSector.runtimeRivers ?? [], CONFIG);
+        applyDragToEntity(asteroid, activeSector, dt);
         const radius = Number.isFinite(asteroid.radius) ? asteroid.radius : 0;
         integrateWithApseCollisions(asteroid, radius, apseColliders, dt);
         resolveMeridianCollisions(asteroid, radius, activeSectors);
         resolvePalimpsestFragmentCollisions(asteroid, radius, palimpsestFragments);
         if (asteroidHitsSingularity(asteroid, palimpsestSingularities)) {
+          activeSector.asteroids.splice(i, 1);
+          continue;
+        }
+        if (objectHitsStar(asteroid, radius, activeStars, false)) {
           activeSector.asteroids.splice(i, 1);
           continue;
         }
@@ -4440,9 +4953,16 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
     );
     destroyObjectsInSafeZones(activeStations);
     repelEnemiesFromStations(activeStations, dt);
-    handleFuelPickups(fuelPickups, ship, SHIP_RADIUS, SCORE_POINTS, addScore, sounds);
+    handleFuelPickups(fuelPickups, ship, SHIP_RADIUS, SCORE_POINTS, addScore, sounds, () => {
+      if (tutorial.active) {
+        tutorial.flags.looted = true;
+      }
+    });
     handleResourcePickups(resourcePickups, ship, SHIP_RADIUS, addResource, sounds, (pickup) => {
       spawnScorePopup(pickup.value, { x: pickup.x, y: pickup.y }, "resource", pickup.color);
+      if (tutorial.active) {
+        tutorial.flags.looted = true;
+      }
     });
     handleBulletHits(
       bullets,
@@ -4457,6 +4977,19 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       particles,
       worldAgeMs
     );
+    if (tutorial.active) {
+      const hasGoals = activeSectors.some((s) => s.goal);
+      const hasFuel = fuelPickups.length > 0;
+      const hasEnemies = enemiesInRange.length > 0;
+      if (hasGoals || hasFuel || hasEnemies) {
+        tutorial.chevronTimer += dt;
+        if (tutorial.chevronTimer >= 1.2) {
+          tutorial.flags.chevrons = true;
+        }
+      } else {
+        tutorial.chevronTimer = 0;
+      }
+    }
     updateZoom(dt);
     if (lastTrailX === null) {
       lastTrailX = ship.x;
@@ -4509,7 +5042,10 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
           const dy = ship.y - asteroid.y;
           const dist = Math.hypot(dx, dy);
           if (dist < asteroid.radius + SHIP_RADIUS) {
-            resolveShipAsteroidCollision(ship, SHIP_RADIUS, asteroid);
+            const collided = resolveShipAsteroidCollision(ship, SHIP_RADIUS, asteroid);
+            if (collided) {
+              handleShipHit("normal");
+            }
           }
         }
       }
@@ -4533,6 +5069,9 @@ export function startGame(canvas, ctx, uiRoot, gameState, sectorIndex, onGameOve
       sounds.play("laser");
       triggerShake(SHAKE.FIRE, 0.12);
       fireCooldown = getFireCooldownSeconds(upgradeLevels.fireRateLevel);
+      if (tutorial.active && manualFire && !autopilotEngaged) {
+        tutorial.flags.fired = true;
+      }
       if (autopilotEngaged) {
         autopilotFirePause = randomRange(AUTOPILOT.FIRE.PAUSE_MIN, AUTOPILOT.FIRE.PAUSE_MAX);
       }
@@ -4774,16 +5313,20 @@ function render() {
   drawTrail(ctx, trail, shipSpeed);
   const shipVisuals = {
     shieldLevel: upgradeLevels.hullLevel,
-    shieldRatio: maxLives > 0 ? lives / maxLives : 0,
+    shieldRatio: maxArmor > 0 ? armor / maxArmor : 0,
     fireRateLevel: upgradeLevels.fireRateLevel,
     fireCooldownSeconds: getFireCooldownSeconds(upgradeLevels.fireRateLevel),
     fireDistanceLevel: upgradeLevels.fireDistanceLevel,
+    scanDistanceLevel: upgradeLevels.scanDistanceLevel,
     fuelTankLevel: upgradeLevels.fuelTankLevel,
     fuelRatio: ship.maxFuel > 0 ? ship.fuel / ship.maxFuel : 0,
     collectorLevel: upgradeLevels.collectorLevel
   };
   if (!sector.goalCollected) {
     sector.goal.draw(ctx);
+  }
+  for (const activeSector of activeSectors) {
+    drawSectorOcclusion(ctx, activeSector, ship);
   }
     if (shipVisible) {
       if (controlsDisabledTimer > 0) {
@@ -4872,6 +5415,8 @@ function render() {
     ctx,
     ship,
     lives,
+    armor,
+    maxArmor,
     surveyed,
     timeSpent,
     distanceFromOrigin,
@@ -4897,6 +5442,8 @@ function render() {
   ctx.restore();
   drawMouseReticle(ctx, mouse, canvas.width, canvas.height, mouseAimEnabled);
   drawTouchControls(ctx, touch, canvas.width, canvas.height);
+  const tutorialCallout = getTutorialCallout(canvas.width, canvas.height, hudScale, isCompactHud);
+  drawTutorialCallout(ctx, tutorialCallout, canvas.width, canvas.height);
 }
 
 function lerp(start, end, t) {
@@ -5046,42 +5593,77 @@ function drawMouseReticle(ctx, mouse, screenW, screenH, active) {
 }
 
 function drawTouchControls(ctx, touch, screenW, screenH) {
-  const showHints = touch?.isActive || screenW < 900 || screenH < 700;
-  if (!showHints) {
+  const minDim = Math.min(screenW, screenH);
+  const showHints = touch?.isActive
+    || (TOUCH.SHOW_HINTS && (screenW < 900 || screenH < 700));
+  if (!showHints && !touch?.aimId) {
     return;
   }
 
-  const baseRadius = Math.min(70, Math.max(48, Math.min(screenW, screenH) * 0.12));
-  const baseX = touch.moveId !== null ? touch.moveStartX : screenW * 0.18;
-  const baseY = touch.moveId !== null ? touch.moveStartY : screenH * 0.78;
-  const knobX = touch.moveId !== null ? touch.moveX : baseX;
-  const knobY = touch.moveId !== null ? touch.moveY : baseY;
+  if (touch?.aimId && TOUCH.RETICLE_ENABLED) {
+    const centerX = screenW / 2;
+    const centerY = screenH / 2;
+    const dx = touch.aimX - centerX;
+    const dy = touch.aimY - centerY;
+    const dist = Math.hypot(dx, dy);
+    if (dist > 0.001) {
+      const nx = dx / dist;
+      const ny = dy / dist;
+      const len = TOUCH.RETICLE_LENGTH ?? 18;
+      ctx.save();
+      ctx.strokeStyle = HUD_COLORS.ACCENT;
+      ctx.globalAlpha = TOUCH.RETICLE_ALPHA ?? 0.22;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(centerX, centerY);
+      ctx.lineTo(centerX + nx * len, centerY + ny * len);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(centerX + nx * len, centerY + ny * len, TOUCH.RETICLE_RADIUS ?? 4, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
 
-  ctx.save();
-  ctx.globalAlpha = touch.moveId !== null ? TOUCH.ACTIVE_ALPHA : TOUCH.HINT_ALPHA;
-  ctx.strokeStyle = HUD_COLORS.ACCENT_SOFT;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(baseX, baseY, baseRadius, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.fillStyle = HUD_COLORS.ACCENT;
-  ctx.globalAlpha = touch.moveId !== null ? 0.5 : 0.25;
-  ctx.beginPath();
-  ctx.arc(knobX, knobY, baseRadius * 0.35, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
+  if (showHints) {
+    const baseRadius = Math.min(
+      TOUCH.THRUST_RADIUS_MAX,
+      Math.max(TOUCH.THRUST_RADIUS_MIN, minDim * (TOUCH.THRUST_RADIUS_SCALE ?? 0.16))
+    );
+    const baseX = screenW * (TOUCH.THRUST_HINT_X ?? 0.18);
+    const baseY = screenH * (TOUCH.THRUST_HINT_Y ?? 0.78);
 
-  const fireRadius = Math.min(48, Math.max(30, Math.min(screenW, screenH) * 0.08));
-  const fireX = screenW * 0.82;
-  const fireY = screenH * 0.78;
-  ctx.save();
-  ctx.globalAlpha = touch.fireId !== null ? TOUCH.ACTIVE_ALPHA : TOUCH.HINT_ALPHA;
-  ctx.strokeStyle = HUD_COLORS.WARNING;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(fireX, fireY, fireRadius, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.restore();
+    ctx.save();
+    ctx.globalAlpha = touch.thrustId !== null ? TOUCH.ACTIVE_ALPHA : TOUCH.HINT_ALPHA;
+    ctx.strokeStyle = HUD_COLORS.ACCENT_SOFT;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(baseX, baseY, baseRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    if (touch.thrustId !== null) {
+      ctx.fillStyle = HUD_COLORS.ACCENT;
+      ctx.globalAlpha = 0.28;
+      ctx.beginPath();
+      ctx.arc(baseX, baseY, baseRadius * 0.55, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    const fireRadius = Math.min(
+      TOUCH.FIRE_RADIUS_MAX,
+      Math.max(TOUCH.FIRE_RADIUS_MIN, minDim * (TOUCH.FIRE_RADIUS_SCALE ?? 0.08))
+    );
+    const fireX = screenW * (TOUCH.FIRE_BUTTON_X ?? 0.82);
+    const fireY = screenH * (TOUCH.FIRE_BUTTON_Y ?? 0.78);
+    ctx.save();
+    ctx.globalAlpha = touch.fireId !== null ? TOUCH.ACTIVE_ALPHA : TOUCH.HINT_ALPHA;
+    ctx.strokeStyle = HUD_COLORS.WARNING;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(fireX, fireY, fireRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 function spawnEnemyForSurvey() {
@@ -5238,9 +5820,7 @@ requestAnimationFrame(loop);
       return;
     }
     wheelZoomStep = 0;
-    camera.zoom += zoomDelta;
-    if (camera.zoom < ZOOM.MIN) camera.zoom = ZOOM.MIN;
-    if (camera.zoom > ZOOM.MAX) camera.zoom = ZOOM.MAX;
+    setZoomIndex(zoomIndex + zoomDelta);
   }
 
   return {

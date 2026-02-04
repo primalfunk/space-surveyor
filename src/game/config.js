@@ -11,7 +11,8 @@ const STORAGE = {
 // Debug toggles for development.
 const DEBUG = {
   VECTORS: true,
-  APSE_COLLISION: false
+  APSE_COLLISION: false,
+  SHIP_VISUALS: false
 };
 
 // Camera controls and screen shake.
@@ -20,7 +21,8 @@ const CAMERA = {
     MIN: 0.25,
     MAX: 2.0,
     SPEED: 0.7,
-    WHEEL_STEP: 0.12
+    WHEEL_STEP: 0.0375,
+    OUT_STEPS_BASE: 0
   },
   SHAKE: {
     DURATION: 0.35,
@@ -155,16 +157,20 @@ const UPGRADES = {
       }
     }
   },
+  SCAN_DISTANCE: {
+    baseCost: 36,
+    costGrowth: 1.45,
+    effect: {
+      stepsPerLevel: 1
+    }
+  },
   HULL: {
     baseCost: 25,
     costGrowth: 1.42,
     effect: {
       maxLivesBase: GAMEPLAY.STARTING_LIVES,
-      extraLivesModel: {
-        maxEffect: 10,
-        effectStep: 1,
-        curveK: 0.1
-      }
+      armorBase: 0,
+      armorMax: 3
     }
   },
   COLLECTOR: {
@@ -204,7 +210,7 @@ const UPGRADES = {
   },
   REPAIR: {
     baseCost: 12,
-    costPerLife: 8
+    costPerArmor: 8
   }
 };
 
@@ -398,11 +404,28 @@ const EFFECTS = {
 const INPUT = {
   TOUCH: {
     DEADZONE: 12,
-    MAX_RADIUS_MIN: 60,
-    MAX_RADIUS_MAX: 110,
-    MOVE_ZONE: 0.5,
-    HINT_ALPHA: 0.22,
-    ACTIVE_ALPHA: 0.45
+    THRUST_RADIUS_MIN: 15,
+    THRUST_RADIUS_MAX: 30,
+    THRUST_RADIUS_SCALE: 0.04,
+    FIRE_RADIUS_MIN: 15,
+    FIRE_RADIUS_MAX: 30,
+    FIRE_RADIUS_SCALE: 0.04,
+    THRUST_ZONE_X: 0.5,
+    THRUST_ZONE_Y: 0.55,
+    FIRE_ZONE_X: 0.5,
+    FIRE_ZONE_Y: 0.55,
+    THRUST_HINT_X: 0.18,
+    THRUST_HINT_Y: 0.78,
+    FIRE_BUTTON_X: 0.82,
+    FIRE_BUTTON_Y: 0.78,
+    RETICLE_ENABLED: true,
+    RETICLE_ALPHA: 0.22,
+    RETICLE_LENGTH: 18,
+    RETICLE_RADIUS: 4,
+    HINT_ALPHA: 0.18,
+    ACTIVE_ALPHA: 0.45,
+    SHOW_HINTS: true,
+    PINCH_ENABLED: true
   }
 };
 
@@ -676,7 +699,10 @@ const PICKUPS = {
 const BEACON_RELIC = {
   SPRITE_SRC: "assets/ui/sprites/beacon.png",
   SIZE: 180,
-  SHIMMER_SPEED: 0.35
+  SHIMMER_SPEED: 0.35,
+  ROT_SPEED: 0.18,
+  PULSE_AMOUNT: 0.04,
+  PULSE_ALPHA: 0.12
 };
 
 // Lore point / survey target tuning.
@@ -926,6 +952,7 @@ const SECTOR = {
   SIZE: 6000,
   ENTRY_SAFE_RADIUS: 900,
   START_SAFE_RADIUS: 1600,
+  RUNTIME_CACHE_RANGE: 3,
   BEACON_SAFE_PADDING: 320,
   MIN_ORIGIN_RING: 8,
   ORIGIN_COOLDOWN: 11,
@@ -968,6 +995,10 @@ const SECTOR = {
       SPECIAL: 1444,
       MERIDIAN: 1555
     },
+  SIGNAL_ORIGIN: {
+    FORCE_NEAR_ORIGIN: true,
+    FORCE_SECTOR: { sx: 0, sy: -1 }
+  },
   APSE: {
     RING_RADIUS_RATIO: 0.35,
     RING_THICKNESS_RATIO: 0.03,
@@ -1171,6 +1202,66 @@ const SECTOR = {
         BOUNCE: 0.82
       }
     },
+  OCCLUSION: {
+    ENABLED: true,
+    DISABLED_SECTOR_TYPES: ["QUIET_REACH"],
+    MERIDIAN_CHANCE_MULT: 0.35,
+    PHASES: {
+      ACT1: { PARTIAL: 0, FULL: 0 },
+      ACT2: { PARTIAL: 0.35, FULL: 0.1 },
+      ACT3: { PARTIAL: 0.2, FULL: 0.4 },
+      ACT3_LATE: { PARTIAL: 0.2, FULL: 0.45 }
+    },
+    COLOR_SAT_MIN: 0.35,
+    COLOR_SAT_MAX: 0.7,
+    COLOR_LIGHT_MIN: 0.45,
+    COLOR_LIGHT_MAX: 0.72,
+    PARTIAL_PATCH_MIN: 5,
+    PARTIAL_PATCH_MAX: 8,
+    PARTIAL_RADIUS_MIN_RATIO: 0.12,
+    PARTIAL_RADIUS_MAX_RATIO: 0.28,
+    PARTIAL_SPEED_MIN_RATIO: 0.0015,
+    PARTIAL_SPEED_MAX_RATIO: 0.004,
+    PARTIAL_PATCH_ALPHA: 0.95,
+    PARTIAL_CLEAR_RADIUS_RATIO: 0.12,
+    PARTIAL_FADE_DISTANCE_RATIO: 0.35,
+    PARTIAL_BASE_FOG_ALPHA: 0.15,
+    PARTIAL_FOG_RADIUS_RATIO: 0.7,
+    FULL_PATCH_MIN: 12,
+    FULL_PATCH_MAX: 18,
+    FULL_RADIUS_MIN_RATIO: 0.18,
+    FULL_RADIUS_MAX_RATIO: 0.4,
+    FULL_SPEED_MIN_RATIO: 0.002,
+    FULL_SPEED_MAX_RATIO: 0.006,
+    FULL_PATCH_ALPHA: 0.95,
+    FULL_CLEAR_RADIUS_RATIO: 0.08,
+    FULL_FOG_RADIUS_RATIO: 0.6,
+    FULL_FOG_ALPHA: 0.65,
+    FULL_FOG_COLOR: "rgba(10, 12, 18, 1)"
+  },
+  DRAG: {
+    ENABLED: true,
+    DISABLED_SECTOR_TYPES: [],
+    MERIDIAN_CHANCE_MULT: 0.5,
+    PHASES: {
+      ACT1: { SINGLE: 0, LAYERED: 0, ALLOW_STACK: false },
+      ACT2: { SINGLE: 0.18, LAYERED: 0, ALLOW_STACK: false },
+      ACT3: { SINGLE: 0.2, LAYERED: 0.35, ALLOW_STACK: false },
+      ACT3_LATE: { SINGLE: 0.2, LAYERED: 0.45, ALLOW_STACK: true }
+    },
+    SINGLE_FIELD_MIN: 1,
+    SINGLE_FIELD_MAX: 2,
+    LAYERED_FIELD_MIN: 3,
+    LAYERED_FIELD_MAX: 5,
+    RADIUS_MIN_RATIO: 0.18,
+    RADIUS_MAX_RATIO: 0.5,
+    DRAG_MIN: 0.94,
+    DRAG_MAX: 0.985,
+    BEACON_DRAG_SCALE: 0.45,
+    NOISE_SCALE_RATIO: 0.2,
+    FALLOFF_POWER: 1.7,
+    TIME_SCALE: 60
+  },
   ZONES: {
     start: { id: "start", asteroidMultiplier: 0.5 },
     middle: { id: "middle", asteroidMultiplier: 1.0 },

@@ -71,14 +71,16 @@ export function showUpgradeStationModal(root, state, onAction) {
 
   const fireRow = createRow("Fire Rate", "fireRate");
   const fireDistanceRow = createRow("Fire Distance", "fireDistance");
+  const scanDistanceRow = createRow("Scan Distance", "scanDistance");
   const fuelTankRow = createRow("Fuel Tank", "fuelTank", "Upgrade");
-  const hullRow = createRow("Hull Strength", "hull");
+  const hullRow = createRow("Armor Plating", "hull");
   const collectorRow = createRow("Collector", "collector");
-  const repairRow = createRow("Repair Hull", "repair");
+  const repairRow = createRow("Repair Armor", "repair");
   const refuelRow = createRow("Refuel", "refuel", "Refuel");
 
   list.appendChild(fireRow.row);
   list.appendChild(fireDistanceRow.row);
+  list.appendChild(scanDistanceRow.row);
   list.appendChild(fuelTankRow.row);
   list.appendChild(hullRow.row);
   list.appendChild(collectorRow.row);
@@ -108,6 +110,11 @@ export function showUpgradeStationModal(root, state, onAction) {
     fireDistanceRow.cost.textContent = `${data.costs.fireDistance}`;
     fireDistanceRow.button.disabled = (data.currency ?? 0) < data.costs.fireDistance;
 
+    scanDistanceRow.level.textContent = `Level ${data.upgrades.scanDistanceLevel}`;
+    scanDistanceRow.gain.textContent = data.gains?.scanDistance ?? "";
+    scanDistanceRow.cost.textContent = data.costs.scanDistance !== null ? `${data.costs.scanDistance}` : "Max reached";
+    scanDistanceRow.button.disabled = data.costs.scanDistance === null || (data.currency ?? 0) < data.costs.scanDistance;
+
     fuelTankRow.level.textContent = `Level ${data.upgrades.fuelTankLevel}`;
     fuelTankRow.gain.textContent = data.gains?.fuelTank ?? "";
     fuelTankRow.cost.textContent = `${data.costs.fuelTank}`;
@@ -123,7 +130,7 @@ export function showUpgradeStationModal(root, state, onAction) {
     collectorRow.cost.textContent = `${data.costs.collector}`;
     collectorRow.button.disabled = (data.currency ?? 0) < data.costs.collector;
 
-    const missing = Math.max(0, (data.maxLives ?? 0) - (data.lives ?? 0));
+    const missing = Math.max(0, (data.maxArmor ?? 0) - (data.armor ?? 0));
     repairRow.level.textContent = missing > 0 ? `${missing} missing` : "Fully repaired";
     repairRow.gain.textContent = missing > 0 ? "Restore" : "OK";
     repairRow.cost.textContent = data.costs.repair !== null ? `${data.costs.repair}` : "N/A";

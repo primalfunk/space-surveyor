@@ -7,12 +7,13 @@ import { generateApseInterior } from "../entities/apseInterior.js";
 import { ApseMetalTexture } from "../entities/apseMetalTexture.js";
 import { PalimpsestFragment } from "../entities/palimpsestFragment.js";
 import { clamp, createRng, hashInts, pickWeighted, randomInt, randomRange } from "./rng.js";
-import { getSectorMeta, saveSectorIndex, setSectorMeta } from "./sectorIndex.js";
+import { getSectorMeta, saveSectorIndex, setSectorMeta, pruneSectorIndex } from "./sectorIndex.js";
 import { saveGameState } from "./gameState.js";
 import { CONFIG } from "./config.js";
 import { getFieldTypeForSector } from "./riverNetwork.js";
 import { getStationInfoForSector, pickStationPosition } from "./stationSystem.js";
 import { CLUE_TOTAL } from "../data/clues.js";
+import { buildSectorModifiers } from "./sectorModifiers.js";
 
 export const SECTOR_SIZE = CONFIG.SECTOR.SIZE;
 export const SECTOR_TYPES = CONFIG.SECTOR.TYPES;
@@ -42,6 +43,7 @@ const STATION_SAFE_RADIUS = STATION.SAFE_ZONE_RADIUS;
 const ZONES = SECTOR.ZONES;
 const FIELD_TYPES = FIELD.TYPES;
 const PATTERN_VERSION = 1;
+const SIGNAL_ORIGIN = SECTOR.SIGNAL_ORIGIN ?? {};
 const APSE = SECTOR.APSE ?? {};
 const MERIDIAN = SECTOR.MERIDIAN ?? {};
 const PALIMPSEST = SECTOR.PALIMPSEST ?? {};
@@ -80,6 +82,11 @@ let cachedForcedApse = null;
 const FORCE_MERIDIAN_NEAR_ORIGIN = Boolean(MERIDIAN.FORCE_NEAR_ORIGIN);
 const FORCE_MERIDIAN_SECTOR = Number.isFinite(MERIDIAN.FORCE_SECTOR?.sx) && Number.isFinite(MERIDIAN.FORCE_SECTOR?.sy)
   ? { sx: Math.floor(MERIDIAN.FORCE_SECTOR.sx), sy: Math.floor(MERIDIAN.FORCE_SECTOR.sy) }
+  : { sx: 0, sy: -1 };
+const FORCE_SIGNAL_ORIGIN_NEAR_ORIGIN = Boolean(SIGNAL_ORIGIN.FORCE_NEAR_ORIGIN);
+const FORCE_SIGNAL_ORIGIN_SECTOR = Number.isFinite(SIGNAL_ORIGIN.FORCE_SECTOR?.sx)
+  && Number.isFinite(SIGNAL_ORIGIN.FORCE_SECTOR?.sy)
+  ? { sx: Math.floor(SIGNAL_ORIGIN.FORCE_SECTOR.sx), sy: Math.floor(SIGNAL_ORIGIN.FORCE_SECTOR.sy) }
   : { sx: 0, sy: -1 };
 const FORCE_PALIMPSEST_NEAR_ORIGIN = Boolean(PALIMPSEST.FORCE_NEAR_ORIGIN);
 const FORCE_PALIMPSEST_SECTOR = Number.isFinite(PALIMPSEST.FORCE_SECTOR?.sx) && Number.isFinite(PALIMPSEST.FORCE_SECTOR?.sy)
@@ -364,6 +371,13 @@ function isForcedMeridianSector(worldSeed, sx, sy) {
   return sx === FORCE_MERIDIAN_SECTOR.sx && sy === FORCE_MERIDIAN_SECTOR.sy;
 }
 
+function isForcedSignalOriginSector(sx, sy) {
+  if (!FORCE_SIGNAL_ORIGIN_NEAR_ORIGIN) {
+    return false;
+  }
+  return sx === FORCE_SIGNAL_ORIGIN_SECTOR.sx && sy === FORCE_SIGNAL_ORIGIN_SECTOR.sy;
+}
+
 function isForcedPalimpsestSector(worldSeed, sx, sy) {
   if (!FORCE_PALIMPSEST_NEAR_ORIGIN) {
     return false;
@@ -494,6 +508,9 @@ function shouldBeQuietReach(worldSeed, sx, sy, ring, progress) {
 }
 
 function pickSpecialSectorType(worldSeed, sx, sy, ring, progress) {
+  if (isForcedSignalOriginSector(sx, sy)) {
+    return SECTOR_TYPES.SIGNAL_ORIGIN;
+  }
   if (isForcedPalimpsestSector(worldSeed, sx, sy)) {
     return SECTOR_TYPES.PALIMPSEST;
   }
@@ -1243,6 +1260,8 @@ export class SectorManager {
     this.persist = opts.persist !== false;
     this.entrySafeRadius = Number.isFinite(opts.entrySafeRadius) ? opts.entrySafeRadius : ENTRY_SAFE_RADIUS;
     this.startSafeRadius = Number.isFinite(opts.startSafeRadius) ? opts.startSafeRadius : this.entrySafeRadius;
+    this.lastPruneKey = null;
+    this.lastPruneRange = null;
   }
 
   getSectorSeed(sx, sy, salt = 0) {
@@ -1517,11 +1536,11 @@ export class SectorManager {
             bounds: cached.bounds ?? null
           };
         }
-        if (cached.sectorType === SECTOR_TYPES.PALIMPSEST) {
-          const center = {
-            x: cached.bounds?.x + cached.bounds?.size / 2,
-            y: cached.bounds?.y + cached.bounds?.size / 2
-          };
+      if (cached.sectorType === SECTOR_TYPES.PALIMPSEST) {
+        const center = {
+          x: cached.bounds?.x + cached.bounds?.size / 2,
+          y: cached.bounds?.y + cached.bounds?.size / 2
+        };
           if (!cached.palimpsestSingularity || !Array.isArray(cached.stars) || cached.stars.length === 0) {
             const seed = this.getSectorSeed(sx, sy, SEED_SALT.SPECIAL + 17);
             const singularity = buildPalimpsestSingularity(cached.bounds, seed);
@@ -1531,11 +1550,26 @@ export class SectorManager {
           if (!cached.palimpsestFragments) {
             const seed = this.getSectorSeed(sx, sy, SEED_SALT.SPECIAL + 18);
             cached.palimpsestFragments = buildPalimpsestFragments(cached.bounds, seed, center);
-          }
         }
       }
-      return cached;
+      if (cached.occlusion === undefined && cached.dragFields === undefined) {
+        if (!cached.bounds) {
+          cached.bounds = this.getBounds(sx, sy);
+        }
+        const clueCount = Math.max(0, Math.floor(this.gameState?.clues?.totalCollected ?? 0));
+        const modifierSeed = Math.floor(Math.random() * 1e9);
+        const modifiers = buildSectorModifiers({
+          bounds: cached.bounds,
+          sectorType: cached.sectorType,
+          clueCount,
+          seed: modifierSeed
+        });
+        cached.occlusion = modifiers.occlusion;
+        cached.dragFields = modifiers.dragFields;
+      }
     }
+    return cached;
+  }
 
     const ring = Math.max(Math.abs(sx), Math.abs(sy));
     const bounds = this.getBounds(sx, sy);
@@ -1726,7 +1760,15 @@ export class SectorManager {
       asteroidOptions
     );
 
-      const sector = {
+    const clueCount = Math.max(0, Math.floor(this.gameState?.clues?.totalCollected ?? 0));
+    const modifierSeed = Math.floor(Math.random() * 1e9);
+    const modifiers = buildSectorModifiers({
+      bounds,
+      sectorType: meta.sectorType,
+      clueCount,
+      seed: modifierSeed
+    });
+    const sector = {
       sx,
       sy,
       bounds,
@@ -1757,6 +1799,8 @@ export class SectorManager {
         apseInterior,
       apseRingThickness: apseRing?.ringThickness ?? null,
       asteroids,
+      occlusion: modifiers.occlusion,
+      dragFields: modifiers.dragFields,
       goalCollected: meta.surveyComplete ? true : false,
       goalDelivered: meta.surveyComplete ? true : false
     };
@@ -1781,5 +1825,32 @@ export class SectorManager {
       }
     }
     return sectors;
+  }
+
+  pruneOutsideRange(centerSx, centerSy, range = 3) {
+    if (!Number.isFinite(centerSx) || !Number.isFinite(centerSy) || !Number.isFinite(range)) {
+      return;
+    }
+    const pruneKey = `${centerSx},${centerSy}`;
+    if (this.lastPruneKey === pruneKey && this.lastPruneRange === range) {
+      return;
+    }
+    this.lastPruneKey = pruneKey;
+    this.lastPruneRange = range;
+    for (const key of this.sectors.keys()) {
+      const [sxRaw, syRaw] = key.split(",");
+      const sx = Number(sxRaw);
+      const sy = Number(syRaw);
+      if (!Number.isFinite(sx) || !Number.isFinite(sy)) {
+        continue;
+      }
+      if (Math.abs(sx - centerSx) > range || Math.abs(sy - centerSy) > range) {
+        this.sectors.delete(key);
+      }
+    }
+    const prunedIndex = pruneSectorIndex(this.sectorIndex, centerSx, centerSy, range);
+    if (prunedIndex && this.persist) {
+      saveSectorIndex(this.sectorIndex);
+    }
   }
 }

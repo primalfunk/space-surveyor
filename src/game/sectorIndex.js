@@ -52,3 +52,26 @@ export function setSectorMeta(index, sx, sy, meta) {
   index[getSectorKey(sx, sy)] = meta;
   return meta;
 }
+
+export function pruneSectorIndex(index, centerSx, centerSy, range) {
+  if (!isPlainObject(index)) {
+    return false;
+  }
+  if (!Number.isFinite(centerSx) || !Number.isFinite(centerSy) || !Number.isFinite(range)) {
+    return false;
+  }
+  let changed = false;
+  for (const key of Object.keys(index)) {
+    const [sxRaw, syRaw] = key.split(",");
+    const sx = Number(sxRaw);
+    const sy = Number(syRaw);
+    if (!Number.isFinite(sx) || !Number.isFinite(sy)) {
+      continue;
+    }
+    if (Math.abs(sx - centerSx) > range || Math.abs(sy - centerSy) > range) {
+      delete index[key];
+      changed = true;
+    }
+  }
+  return changed;
+}

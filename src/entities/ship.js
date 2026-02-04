@@ -1,7 +1,7 @@
 import { CONFIG } from "../game/config.js";
 import { sounds } from "../game/audio.js";
 
-const { SHIP } = CONFIG;
+const { SHIP, DEBUG } = CONFIG;
 const ROT_SPEED = SHIP.ROT_SPEED;     // radians/sec
 const THRUST = SHIP.THRUST;
 const MAX_FUEL = SHIP.MAX_FUEL;
@@ -24,23 +24,35 @@ const UPGRADE_PALETTES = {
 };
 
 const INDICATOR_GEOM = {
-  SHIELD_AURA_INNER: 0.55,
-  SHIELD_AURA_OUTER: 0.9,
-  EMITTER_RADIUS: 0.24,
-  EMITTER_SPREAD: 0.85,
-  FUEL_TOP: 0.1,
-  FUEL_BOTTOM: 0.45,
-  FUEL_WIDTH: 0.18,
-  COLLECTOR_Y_START: -0.05,
-  COLLECTOR_STEP: 0.08,
-  COLLECTOR_WIDTH: 0.16,
-  COLLECTOR_HEIGHT: 0.06,
-  FIRE_LINE_START: -0.48,
-  FIRE_LINE_END: -0.92
+  SHIELD_FIELD_INNER: 0.55,
+  SHIELD_FIELD_OUTER: 0.9,
+  NOSE_TIP_Y: -0.98,
+  NOSE_BASE_Y: -0.48,
+  NOSE_WIDTH: 0.42,
+  COCKPIT_Y: -0.24,
+  COCKPIT_W: 0.18,
+  COCKPIT_H: 0.12,
+  POD_OFFSET_X: 0.24,
+  POD_W: 0.13,
+  POD_H: 0.09,
+  SHIELD_KNOB_Y: -0.02,
+  SHIELD_KNOB_R: 0.055,
+  FUEL_Y: 0.16,
+  FUEL_W: 0.18,
+  FUEL_H: 0.16,
+  COLLECTOR_CORE_Y: 0.32,
+  COLLECTOR_CORE_W: 0.12,
+  COLLECTOR_CORE_H: 0.1,
+  COLLECTOR_FIELD_INNER: 0.38,
+  COLLECTOR_FIELD_OUTER: 0.5
 };
 
 function clamp01(value) {
   return Math.max(0, Math.min(1, value));
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
 }
 
 function hexToRgb(hex) {
@@ -202,16 +214,25 @@ export class Ship {
     ctx.translate(sx, sy);
     ctx.rotate(this.heading);
 
-    this.drawShieldAura(ctx, visuals);
+    const now = performance.now() / 1000;
+    this.drawShieldAura(ctx, visuals, now);
+    this.drawCollectorField(ctx, visuals, now);
     if (this.thrusting !== 0 || this.kickTimer > 0) {
       this.drawFlames(ctx, this.thrusting, speed);
     }
-    this.drawIndicators(ctx, visuals);
-    this.drawHull(ctx);
+    this.drawHullFill(ctx);
+    this.drawIndicators(ctx, visuals, now);
+    this.drawHullLines(ctx);
+    if (DEBUG.SHIP_VISUALS) {
+      ctx.save();
+      ctx.globalAlpha = 0.85;
+      this.drawIndicators(ctx, visuals, now);
+      ctx.restore();
+    }
     ctx.restore();
   }
 
-  drawShieldAura(ctx, visuals) {
+  drawShieldAura(ctx, visuals, time) {
     const shieldLevel = Math.max(0, visuals?.shieldLevel ?? 0);
     const shieldRatio = clamp01(visuals?.shieldRatio ?? 0);
     if (shieldLevel <= 0 || shieldRatio <= 0) {
@@ -222,9 +243,12 @@ export class Ship {
       return;
     }
     const radius = SHIP_DRAW_SIZE * 0.58;
-    const inner = SHIP_DRAW_SIZE * INDICATOR_GEOM.SHIELD_AURA_INNER;
-    const outer = SHIP_DRAW_SIZE * INDICATOR_GEOM.SHIELD_AURA_OUTER;
-    const glow = ctx.createRadialGradient(0, 0, inner, 0, 0, outer);
+    const inner = SHIP_DRAW_SIZE * INDICATOR_GEOM.SHIELD_FIELD_INNER;
+    const outer = SHIP_DRAW_SIZE * INDICATOR_GEOM.SHIELD_FIELD_OUTER;
+    const drift = SHIP_DRAW_SIZE * 0.02;
+    const offsetX = Math.cos(time * 0.18) * drift;
+    const offsetY = Math.sin(time * 0.12) * drift;
+    const glow = ctx.createRadialGradient(offsetX, offsetY, inner * 0.9, 0, 0, outer);
     const alpha = clamp01(shieldRatio) * levelAlpha(shieldLevel, 0.35, 0.8);
     glow.addColorStop(0, rgbaFromHex(color, alpha));
     glow.addColorStop(1, rgbaFromHex(color, 0));
@@ -237,144 +261,321 @@ export class Ship {
     ctx.restore();
   }
 
-  drawIndicators(ctx, visuals) {
+  drawCollectorField(ctx, visuals, time) {
+    const collectorLevel = Math.max(0, visuals?.collectorLevel ?? 0);
+    if (collectorLevel <= 0) {
+      return;
+    }
+    const color = paletteColor(UPGRADE_PALETTES.COLLECTOR, Math.max(1, collectorLevel));
+    if (!color) {
+      return;
+    }
+    const levelNorm = clamp01((collectorLevel - 1) / 4);
+    const innerR = SHIP_DRAW_SIZE * INDICATOR_GEOM.COLLECTOR_FIELD_INNER;
+    const outerR = SHIP_DRAW_SIZE * INDICATOR_GEOM.COLLECTOR_FIELD_OUTER;
+    const range = Math.max(1, outerR - innerR);
+    const speed = lerp(0.08, 0.22, levelNorm);
+    const arcLen = Math.PI / 6;
+    const alpha = lerp(0.18, 0.5, levelNorm);
+    ctx.save();
+    ctx.strokeStyle = rgbaFromHex(color, alpha);
+    ctx.lineWidth = 1.2;
+    for (let i = 0; i < 6; i++) {
+      const phase = (time * speed + i * 0.2) % 1;
+      const r = outerR - phase * range;
+      const angle = i * (Math.PI * 2 / 6) + time * 0.08;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, angle - arcLen * 0.5, angle + arcLen * 0.5);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  drawIndicators(ctx, visuals, time) {
     if (!visuals) {
       return;
     }
-    const now = performance.now() / 1000;
     const shieldLevel = Math.max(0, visuals.shieldLevel ?? 0);
     const shieldRatio = clamp01(visuals.shieldRatio ?? 0);
     const fireRateLevel = Math.max(0, visuals.fireRateLevel ?? 0);
     const fireDistanceLevel = Math.max(0, visuals.fireDistanceLevel ?? 0);
+    const scanDistanceLevel = Math.max(
+      0,
+      visuals.scanDistanceLevel ?? visuals.fireDistanceLevel ?? 0
+    );
     const fuelTankLevel = Math.max(0, visuals.fuelTankLevel ?? 0);
     const fuelRatio = clamp01(visuals.fuelRatio ?? 0);
     const collectorLevel = Math.max(0, visuals.collectorLevel ?? 0);
-    const fireCooldown = Math.max(0.05, visuals.fireCooldownSeconds ?? 0.26);
+    const fireCooldown = Math.max(0.1, visuals.fireCooldownSeconds ?? 0.26);
 
-    const half = SHIP_DRAW_SIZE / 2;
     ctx.save();
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
-    if (shieldLevel > 0) {
-      const color = paletteColor(UPGRADE_PALETTES.SHIELD, shieldLevel);
-      if (color) {
-        ctx.strokeStyle = color;
-        ctx.globalAlpha = levelAlpha(shieldLevel, 0.35, 0.75) * shieldRatio;
-        ctx.lineWidth = 1.2;
-        ctx.beginPath();
-        ctx.arc(0, 0, half * 0.28, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-    }
-
-    if (fireRateLevel > 0) {
-      const color = paletteColor(UPGRADE_PALETTES.FIRE_RATE, fireRateLevel);
-      if (color) {
-        const pulse = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin((now / fireCooldown) * Math.PI * 2));
-        ctx.strokeStyle = color;
-        ctx.globalAlpha = levelAlpha(fireRateLevel, 0.25, 0.75) * pulse;
-        ctx.lineWidth = 1.1;
-        const ticks = Math.max(1, fireRateLevel);
-        const baseAngle = -Math.PI / 2;
-        const spread = INDICATOR_GEOM.EMITTER_SPREAD;
-        for (let i = 0; i < ticks; i++) {
-          const t = ticks === 1 ? 0.5 : i / (ticks - 1);
-          const angle = baseAngle - spread * 0.5 + spread * t;
-          const r0 = half * 0.18;
-          const r1 = half * INDICATOR_GEOM.EMITTER_RADIUS;
-          const x0 = Math.cos(angle) * r0;
-          const y0 = Math.sin(angle) * r0;
-          const x1 = Math.cos(angle) * r1;
-          const y1 = Math.sin(angle) * r1;
-          ctx.beginPath();
-          ctx.moveTo(x0, y0);
-          ctx.lineTo(x1, y1);
-          ctx.stroke();
-        }
-      }
-    }
-
-    if (fireDistanceLevel > 0) {
-      const color = paletteColor(UPGRADE_PALETTES.FIRE_DISTANCE, fireDistanceLevel);
-      if (color) {
-        const lineStart = SHIP_DRAW_SIZE * INDICATOR_GEOM.FIRE_LINE_START;
-        const lineEnd = SHIP_DRAW_SIZE * (INDICATOR_GEOM.FIRE_LINE_END - fireDistanceLevel * 0.04);
-        ctx.strokeStyle = color;
-        ctx.globalAlpha = levelAlpha(fireDistanceLevel, 0.2, 0.7);
-        ctx.lineWidth = 1;
-        if (fireDistanceLevel >= 2) {
-          ctx.setLineDash([2, 3]);
-        }
-        ctx.beginPath();
-        ctx.moveTo(0, lineStart);
-        ctx.lineTo(0, lineEnd);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        if (fireDistanceLevel >= 3) {
-          ctx.globalAlpha *= 0.6;
-          ctx.beginPath();
-          ctx.moveTo(2, lineStart + 2);
-          ctx.lineTo(2, lineEnd + 2);
-          ctx.stroke();
-        }
-      }
-    }
-
-    if (fuelTankLevel > 0) {
-      const color = paletteColor(UPGRADE_PALETTES.FUEL, fuelTankLevel);
-      if (color) {
-        const cells = fuelTankLevel * 3;
-        const top = SHIP_DRAW_SIZE * INDICATOR_GEOM.FUEL_TOP;
-        const bottom = SHIP_DRAW_SIZE * INDICATOR_GEOM.FUEL_BOTTOM;
-        const height = bottom - top;
-        const cellH = height / cells;
-        const cellW = SHIP_DRAW_SIZE * INDICATOR_GEOM.FUEL_WIDTH;
-        const filled = Math.round(cells * fuelRatio);
-        for (let i = 0; i < cells; i++) {
-          const y0 = top + i * cellH;
-          const alpha = i < filled ? 0.7 : 0.25;
-          ctx.strokeStyle = color;
-          ctx.globalAlpha = levelAlpha(fuelTankLevel, 0.3, 0.7) * alpha;
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.rect(-cellW / 2, y0, cellW, cellH * 0.8);
-          ctx.stroke();
-        }
-      }
-    }
-
-    if (collectorLevel > 0) {
-      const color = paletteColor(UPGRADE_PALETTES.COLLECTOR, collectorLevel);
-      if (color) {
-        ctx.strokeStyle = color;
-        ctx.globalAlpha = levelAlpha(collectorLevel, 0.25, 0.7);
-        ctx.lineWidth = 1.1;
-        const count = collectorLevel;
-        const wobble = collectorLevel > 1 ? Math.sin(now * 1.4) * 0.02 : 0;
-        for (let i = 0; i < count; i++) {
-          const y = SHIP_DRAW_SIZE * (INDICATOR_GEOM.COLLECTOR_Y_START + i * INDICATOR_GEOM.COLLECTOR_STEP);
-          const halfW = SHIP_DRAW_SIZE * INDICATOR_GEOM.COLLECTOR_WIDTH * 0.5;
-          const h = SHIP_DRAW_SIZE * INDICATOR_GEOM.COLLECTOR_HEIGHT;
-          const offset = wobble * (i + 1);
-          ctx.beginPath();
-          ctx.moveTo(-halfW - offset, y - h * 0.5);
-          ctx.lineTo(-halfW * 0.35 - offset, y);
-          ctx.lineTo(-halfW - offset, y + h * 0.5);
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.moveTo(halfW + offset, y - h * 0.5);
-          ctx.lineTo(halfW * 0.35 + offset, y);
-          ctx.lineTo(halfW + offset, y + h * 0.5);
-          ctx.stroke();
-        }
-      }
-    }
+    this.drawNose(ctx, scanDistanceLevel, time);
+    this.drawCockpitCore(ctx);
+    this.drawFireRatePod(ctx, fireRateLevel, fireCooldown, time);
+    this.drawFireDistancePod(ctx, fireDistanceLevel, time);
+    this.drawShieldKnob(ctx, shieldLevel, shieldRatio, time);
+    this.drawFuelTank(ctx, fuelTankLevel, fuelRatio, time);
+    this.drawCollectorCore(ctx, collectorLevel, time);
 
     ctx.restore();
   }
 
-  drawHull(ctx) {
+  drawNose(ctx, scanDistanceLevel, time) {
+    const levelNorm = clamp01((scanDistanceLevel - 1) / 4);
+    const tipY = SHIP_DRAW_SIZE * INDICATOR_GEOM.NOSE_TIP_Y;
+    const baseY = SHIP_DRAW_SIZE * INDICATOR_GEOM.NOSE_BASE_Y;
+    const halfW = SHIP_DRAW_SIZE * INDICATOR_GEOM.NOSE_WIDTH;
+    const color = paletteColor(UPGRADE_PALETTES.FIRE_DISTANCE, Math.max(1, scanDistanceLevel)) ?? "#8a8a8a";
+    const baseFill = scanDistanceLevel > 0
+      ? rgbaFromHex(color, 0.55)
+      : "rgba(130, 130, 130, 0.35)";
+    const outline = "rgba(0, 0, 0, 0.8)";
+
+    const curvePull = (baseY - tipY) * 0.22;
+    ctx.save();
+    ctx.fillStyle = baseFill;
+    ctx.strokeStyle = outline;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(-halfW, baseY);
+    ctx.quadraticCurveTo(-halfW * 0.15, tipY + curvePull, 0, tipY);
+    ctx.quadraticCurveTo(halfW * 0.15, tipY + curvePull, halfW, baseY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    const inset = 0.6;
+    const innerW = halfW * inset;
+    const innerTip = lerp(baseY, tipY, 0.78);
+    const speed = lerp(0.2, 0.6, levelNorm);
+    const phase = (time * speed) % 1;
+    const spread = 0.22;
+    const highlight = rgbaFromHex(color, 0.9);
+    const baseColor = rgbaFromHex(color, 0.35);
+    const grad = ctx.createLinearGradient(0, baseY, 0, tipY);
+    const p0 = Math.max(0, phase - spread);
+    const p1 = Math.min(1, phase + spread);
+    grad.addColorStop(0, baseColor);
+    grad.addColorStop(p0, baseColor);
+    grad.addColorStop(phase, highlight);
+    grad.addColorStop(p1, baseColor);
+    grad.addColorStop(1, baseColor);
+    ctx.fillStyle = grad;
+    const innerBaseY = baseY + (baseY - tipY) * 0.08;
+    const innerPull = (innerBaseY - innerTip) * 0.22;
+    ctx.beginPath();
+    ctx.moveTo(-innerW, innerBaseY);
+    ctx.quadraticCurveTo(-innerW * 0.18, innerTip + innerPull, 0, innerTip);
+    ctx.quadraticCurveTo(innerW * 0.18, innerTip + innerPull, innerW, innerBaseY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  drawCockpitCore(ctx) {
+    const cx = 0;
+    const cy = SHIP_DRAW_SIZE * INDICATOR_GEOM.COCKPIT_Y;
+    const w = SHIP_DRAW_SIZE * INDICATOR_GEOM.COCKPIT_W;
+    const h = SHIP_DRAW_SIZE * INDICATOR_GEOM.COCKPIT_H;
+    ctx.fillStyle = "rgba(70, 78, 86, 0.82)";
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, w * 0.5, h * 0.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  drawFireRatePod(ctx, fireRateLevel, fireCooldown, time) {
+    const podX = -SHIP_DRAW_SIZE * INDICATOR_GEOM.POD_OFFSET_X;
+    const podY = SHIP_DRAW_SIZE * INDICATOR_GEOM.COCKPIT_Y;
+    const podW = SHIP_DRAW_SIZE * INDICATOR_GEOM.POD_W;
+    const podH = SHIP_DRAW_SIZE * INDICATOR_GEOM.POD_H;
+    const connectorStartX = -SHIP_DRAW_SIZE * 0.28;
+    const connectorEndX = podX + podW * 0.5;
+    const levelNorm = clamp01((fireRateLevel - 1) / 4);
+    ctx.save();
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(connectorStartX, podY);
+    ctx.lineTo(connectorEndX, podY);
+    ctx.stroke();
+    ctx.translate(podX, podY);
+    ctx.fillStyle = "rgba(30, 38, 46, 0.7)";
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, podW * 0.5, podH * 0.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    const color = paletteColor(UPGRADE_PALETTES.FIRE_RATE, Math.max(1, fireRateLevel));
+    const alpha = fireRateLevel > 0 ? lerp(0.25, 0.75, levelNorm) : 0.12;
+    const arcSpan = lerp(Math.PI * 0.12, Math.PI * 0.45, levelNorm);
+    const period = Math.max(0.12, fireCooldown);
+    const phase = (time % period) / period;
+    const angle = phase * Math.PI * 2 - Math.PI / 2;
+    ctx.strokeStyle = rgbaFromHex(color, alpha);
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.arc(0, 0, podW * 0.28, angle - arcSpan * 0.5, angle + arcSpan * 0.5);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  drawFireDistancePod(ctx, fireDistanceLevel, time) {
+    const podX = SHIP_DRAW_SIZE * INDICATOR_GEOM.POD_OFFSET_X;
+    const podY = SHIP_DRAW_SIZE * INDICATOR_GEOM.COCKPIT_Y;
+    const podW = SHIP_DRAW_SIZE * INDICATOR_GEOM.POD_W;
+    const podH = SHIP_DRAW_SIZE * INDICATOR_GEOM.POD_H;
+    const connectorStartX = SHIP_DRAW_SIZE * 0.28;
+    const connectorEndX = podX - podW * 0.5;
+    const levelNorm = clamp01((fireDistanceLevel - 1) / 4);
+    ctx.save();
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(connectorStartX, podY);
+    ctx.lineTo(connectorEndX, podY);
+    ctx.stroke();
+    ctx.translate(podX, podY);
+    ctx.fillStyle = "rgba(30, 38, 46, 0.7)";
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, podW * 0.5, podH * 0.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    const color = paletteColor(UPGRADE_PALETTES.FIRE_DISTANCE, Math.max(1, fireDistanceLevel));
+    const baseAlpha = fireDistanceLevel > 0 ? lerp(0.18, 0.6, levelNorm) : 0.1;
+    const lineStart = podH * 0.35;
+    const lineEnd = -podH * 0.35;
+    const lineLen = lineStart - lineEnd;
+    ctx.strokeStyle = rgbaFromHex(color, baseAlpha * 0.4);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, lineStart);
+    ctx.lineTo(0, lineEnd);
+    ctx.stroke();
+
+    const speed = lerp(0.35, 0.9, levelNorm);
+    const phase = (time * speed) % 1;
+    const segFrac = lerp(0.2, 0.6, levelNorm);
+    const segLen = lineLen * segFrac;
+    const segStart = lineStart - phase * (lineLen - segLen);
+    const segEnd = segStart - segLen;
+    ctx.strokeStyle = rgbaFromHex(color, baseAlpha);
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.moveTo(0, segStart);
+    ctx.lineTo(0, segEnd);
+    ctx.stroke();
+
+    if (fireDistanceLevel >= 4) {
+      const echoOffset = lineLen * 0.28;
+      ctx.strokeStyle = rgbaFromHex(color, baseAlpha * 0.45);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, segStart + echoOffset);
+      ctx.lineTo(0, segEnd + echoOffset);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  drawShieldKnob(ctx, shieldLevel, shieldRatio, time) {
+    if (shieldLevel <= 0) {
+      return;
+    }
+    const r = SHIP_DRAW_SIZE * INDICATOR_GEOM.SHIELD_KNOB_R;
+    const y = SHIP_DRAW_SIZE * INDICATOR_GEOM.SHIELD_KNOB_Y;
+    const levelNorm = clamp01((shieldLevel - 1) / 4);
+    const color = paletteColor(UPGRADE_PALETTES.SHIELD, Math.max(1, shieldLevel));
+    ctx.save();
+    ctx.translate(0, y);
+    ctx.strokeStyle = rgbaFromHex(color, 0.35);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.stroke();
+
+    const speed = lerp(0.4, 1.2, levelNorm);
+    const span = lerp(Math.PI * 0.35, Math.PI * 1.9, levelNorm);
+    const alpha = lerp(0.2, 0.75, levelNorm) * (0.2 + 0.8 * shieldRatio);
+    const angle = time * speed;
+    ctx.strokeStyle = rgbaFromHex(color, alpha);
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, angle - span * 0.5, angle + span * 0.5);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  drawFuelTank(ctx, fuelTankLevel, fuelRatio, time) {
+    const color = paletteColor(UPGRADE_PALETTES.FUEL, Math.max(1, fuelTankLevel)) ?? "#7a7a7a";
+    const x = -SHIP_DRAW_SIZE * INDICATOR_GEOM.FUEL_W * 0.5;
+    const y = SHIP_DRAW_SIZE * INDICATOR_GEOM.FUEL_Y - SHIP_DRAW_SIZE * INDICATOR_GEOM.FUEL_H * 0.5;
+    const w = SHIP_DRAW_SIZE * INDICATOR_GEOM.FUEL_W;
+    const h = SHIP_DRAW_SIZE * INDICATOR_GEOM.FUEL_H;
+    ctx.save();
+    ctx.fillStyle = "rgba(20, 26, 30, 0.6)";
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.fill();
+    ctx.stroke();
+
+    const fillHeight = h * clamp01(fuelRatio);
+    if (fillHeight > 0.5) {
+      let fillStyle = rgbaFromHex(color, 0.65);
+      if (fuelRatio > 0.9) {
+        const drift = (time * 0.12) % 1;
+        const grad = ctx.createLinearGradient(0, y, 0, y + h);
+        const glow = rgbaFromHex(color, 0.85);
+        grad.addColorStop(0, rgbaFromHex(color, 0.55));
+        grad.addColorStop(Math.max(0, drift - 0.2), rgbaFromHex(color, 0.55));
+        grad.addColorStop(drift, glow);
+        grad.addColorStop(Math.min(1, drift + 0.2), rgbaFromHex(color, 0.55));
+        grad.addColorStop(1, rgbaFromHex(color, 0.55));
+        fillStyle = grad;
+      }
+      ctx.fillStyle = fillStyle;
+      ctx.beginPath();
+      ctx.rect(x + 1.2, y + 1.2, w - 2.4, fillHeight - 2.4);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  drawCollectorCore(ctx, collectorLevel, time) {
+    const color = paletteColor(UPGRADE_PALETTES.COLLECTOR, Math.max(1, collectorLevel)) ?? "#6f6f78";
+    const levelNorm = clamp01((collectorLevel - 1) / 4);
+    const y = SHIP_DRAW_SIZE * INDICATOR_GEOM.COLLECTOR_CORE_Y;
+    const w = SHIP_DRAW_SIZE * INDICATOR_GEOM.COLLECTOR_CORE_W;
+    const h = SHIP_DRAW_SIZE * INDICATOR_GEOM.COLLECTOR_CORE_H;
+    const speed = lerp(0.6, 1.4, levelNorm);
+    const compress = 0.85 + Math.sin(time * speed) * 0.08 * (0.35 + 0.65 * levelNorm);
+    const grad = ctx.createLinearGradient(0, y - h * 0.5, 0, y + h * 0.5);
+    grad.addColorStop(0, rgbaFromHex(color, 0.2));
+    grad.addColorStop(0.5, rgbaFromHex(color, 0.75));
+    grad.addColorStop(1, rgbaFromHex(color, 0.2));
+    ctx.save();
+    ctx.translate(0, y);
+    ctx.scale(compress, 1);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(0, h * 0.5);
+    ctx.lineTo(-w * 0.5, -h * 0.5);
+    ctx.lineTo(w * 0.5, -h * 0.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  drawHullFill(ctx) {
     const half = SHIP_DRAW_SIZE / 2;
     const noseW = SHIP_DRAW_SIZE * 0.22;
     const bodyW = SHIP_DRAW_SIZE * 0.42;
@@ -385,11 +586,38 @@ export class Ship {
     const tailY = half * 0.58;
     const exhaustY = half * 0.9;
     const hullFill = "rgba(245, 246, 248, 0.95)";
+    ctx.save();
+    ctx.fillStyle = hullFill;
+    ctx.beginPath();
+    ctx.moveTo(-noseW, noseY);
+    ctx.lineTo(-bodyW, shoulderY);
+    ctx.lineTo(-bodyW, midY);
+    ctx.lineTo(-tailW, tailY);
+    ctx.lineTo(-tailW * 0.6, exhaustY);
+    ctx.lineTo(tailW * 0.6, exhaustY);
+    ctx.lineTo(tailW, tailY);
+    ctx.lineTo(bodyW, midY);
+    ctx.lineTo(bodyW, shoulderY);
+    ctx.lineTo(noseW, noseY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  drawHullLines(ctx) {
+    const half = SHIP_DRAW_SIZE / 2;
+    const noseW = SHIP_DRAW_SIZE * 0.22;
+    const bodyW = SHIP_DRAW_SIZE * 0.42;
+    const tailW = SHIP_DRAW_SIZE * 0.3;
+    const noseY = -half * 0.9;
+    const shoulderY = -half * 0.55;
+    const midY = half * 0.2;
+    const tailY = half * 0.58;
+    const exhaustY = half * 0.9;
     const hullEdge = "rgba(0, 0, 0, 0.9)";
     const innerColor = "rgba(130, 130, 130, 0.75)";
 
     ctx.save();
-    ctx.fillStyle = hullFill;
     ctx.lineWidth = 2.6;
     ctx.strokeStyle = hullEdge;
     ctx.beginPath();
@@ -404,7 +632,6 @@ export class Ship {
     ctx.lineTo(bodyW, shoulderY);
     ctx.lineTo(noseW, noseY);
     ctx.closePath();
-    ctx.fill();
     ctx.stroke();
 
     ctx.strokeStyle = innerColor;

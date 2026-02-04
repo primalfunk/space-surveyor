@@ -2,6 +2,7 @@ import { Asteroid } from "../entities/asteroid.js";
 import { ResourcePickup } from "../entities/resourcePickup.js";
 import { integrate } from "./physics.js";
 import { applyForcesToEntity } from "./forceFields.js";
+import { applyDragToEntity } from "./sectorModifiers.js";
 import { CONFIG } from "./config.js";
 import { getRarityValueMultiplier, rollRarityIndex } from "./resourceRarity.js";
 import { resolveMeridianCollision } from "./meridian.js";
@@ -194,13 +195,39 @@ function isInStationSafeZone(x, y, stations) {
   return false;
 }
 
-export function updateBullets(bullets, dt, stations = null) {
+function hitsStar(x, y, radius, stars) {
+  if (!Array.isArray(stars) || stars.length === 0) {
+    return false;
+  }
+  const bodyRadius = Number.isFinite(radius) ? radius : 0;
+  for (const star of stars) {
+    if (!star || !Number.isFinite(star.radius)) {
+      continue;
+    }
+    const dx = x - star.x;
+    const dy = y - star.y;
+    if (Math.hypot(dx, dy) < star.radius + bodyRadius) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function updateBullets(bullets, dt, activeSectors = null, activeStars = null, stations = null) {
   for (let i = bullets.length - 1; i >= 0; i--) {
     const b = bullets[i];
+    const sector = findSectorForPosition(activeSectors, b.x, b.y);
+    if (sector) {
+      applyDragToEntity(b, sector, dt);
+    }
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     b.life -= dt;
     if (b.life <= 0) {
+      bullets.splice(i, 1);
+      continue;
+    }
+    if (hitsStar(b.x, b.y, 3, activeStars)) {
       bullets.splice(i, 1);
       continue;
     }
@@ -217,8 +244,10 @@ export function updateEnemyBullets(
   shipRadius,
   invulnTimer,
   shipVisible,
-  handleLifeLoss,
+  handleShipHit,
   dt,
+  activeSectors = null,
+  activeStars = null,
   stations = null
 ) {
   if (enemyBullets.length === 0) {
@@ -226,10 +255,18 @@ export function updateEnemyBullets(
   }
   for (let i = enemyBullets.length - 1; i >= 0; i--) {
     const b = enemyBullets[i];
+    const sector = findSectorForPosition(activeSectors, b.x, b.y);
+    if (sector) {
+      applyDragToEntity(b, sector, dt);
+    }
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     b.life -= dt;
     if (b.life <= 0) {
+      enemyBullets.splice(i, 1);
+      continue;
+    }
+    if (hitsStar(b.x, b.y, 3, activeStars)) {
       enemyBullets.splice(i, 1);
       continue;
     }
@@ -253,7 +290,7 @@ export function updateEnemyBullets(
             }
           }
         }
-        handleLifeLoss("normal");
+        handleShipHit("normal");
         return;
       }
     }
@@ -360,7 +397,8 @@ export function updateFuelPickups(fuelPickups, activeStars, activeSectors, dt, w
     return;
   }
   const apseColliders = collectApseColliders(activeSectors);
-  for (const fuel of fuelPickups) {
+  for (let i = fuelPickups.length - 1; i >= 0; i--) {
+    const fuel = fuelPickups[i];
     if (Number.isFinite(worldAgeMs) && Number.isFinite(fuel.spawnTimeMs)) {
       fuel.ageMs = Math.max(0, worldAgeMs - fuel.spawnTimeMs);
     }
@@ -368,9 +406,13 @@ export function updateFuelPickups(fuelPickups, activeStars, activeSectors, dt, w
     const sector = findSectorForPosition(activeSectors, fuel.x, fuel.y);
     const rivers = sector?.runtimeRivers ?? [];
     applyForcesToEntity(fuel, dt, activeStars, rivers, CONFIG);
+    applyDragToEntity(fuel, sector, dt);
     integrateWithApseCollisions(fuel, FUEL_PICKUP.RADIUS, sector, dt, apseColliders);
     if (sector?.meridian) {
       resolveMeridianCollision(fuel, FUEL_PICKUP.RADIUS, sector.meridian);
+    }
+    if (hitsStar(fuel.x, fuel.y, FUEL_PICKUP.RADIUS, activeStars)) {
+      fuelPickups.splice(i, 1);
     }
   }
 }
@@ -380,7 +422,8 @@ export function updateResourcePickups(resourcePickups, activeStars, activeSector
     return;
   }
   const apseColliders = collectApseColliders(activeSectors);
-  for (const pickup of resourcePickups) {
+  for (let i = resourcePickups.length - 1; i >= 0; i--) {
+    const pickup = resourcePickups[i];
     if (Number.isFinite(worldAgeMs) && Number.isFinite(pickup.spawnTimeMs)) {
       pickup.ageMs = Math.max(0, worldAgeMs - pickup.spawnTimeMs);
     }
@@ -388,14 +431,18 @@ export function updateResourcePickups(resourcePickups, activeStars, activeSector
     const sector = findSectorForPosition(activeSectors, pickup.x, pickup.y);
     const rivers = sector?.runtimeRivers ?? [];
     applyForcesToEntity(pickup, dt, activeStars, rivers, CONFIG);
+    applyDragToEntity(pickup, sector, dt);
     integrateWithApseCollisions(pickup, RESOURCE_DROP.RADIUS, sector, dt, apseColliders);
     if (sector?.meridian) {
       resolveMeridianCollision(pickup, RESOURCE_DROP.RADIUS, sector.meridian);
     }
+    if (hitsStar(pickup.x, pickup.y, RESOURCE_DROP.RADIUS, activeStars)) {
+      resourcePickups.splice(i, 1);
+    }
   }
 }
 
-export function handleFuelPickups(fuelPickups, ship, shipRadius, scorePoints, addScore, sounds) {
+export function handleFuelPickups(fuelPickups, ship, shipRadius, scorePoints, addScore, sounds, onPickup = null) {
   if (fuelPickups.length === 0) {
     return;
   }
@@ -408,6 +455,9 @@ export function handleFuelPickups(fuelPickups, ship, shipRadius, scorePoints, ad
       ship.fuel = Math.min(ship.maxFuel, ship.fuel + refillAmount);
       addScore(scorePoints.FUEL, true, false, { x: fuel.x, y: fuel.y }, "fuel");
       sounds.play("got_fuel");
+      if (typeof onPickup === "function") {
+        onPickup(fuel);
+      }
       fuelPickups.splice(i, 1);
     }
   }
@@ -614,6 +664,7 @@ export function updateEnemies(
     const sector = findSectorForPosition(activeSectors, enemy.x, enemy.y);
     const rivers = sector?.runtimeRivers ?? [];
     applyForcesToEntity(enemy, dt, activeStars, rivers, CONFIG);
+    applyDragToEntity(enemy, sector, dt);
     integrate(enemy, dt);
     if (sector?.meridian) {
       resolveMeridianCollision(enemy, ENEMY_HIT_RADIUS, sector.meridian);

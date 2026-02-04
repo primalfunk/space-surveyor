@@ -1,0 +1,74 @@
+FEATURE ADDITIONS — OBJECTS, SPAWNS, DROPPABLES
+
+OBJECT TYPES
+
+1) CORE
+- Behavior:
+  - On destruction, triggers an explosion with radius = 3x standard explosion radius.
+- Drops:
+  - None (for now).
+
+2) LURE
+- Spawn rules:
+  - 5% chance per sector.
+  - Never spawns in special sector types.
+- Behavior:
+  - Passive until shot.
+  - When shot, immediately spawns 1–3 enemy ships into the current sector
+  - Initial placement of the ships is just beyond player's visual range and, if multiple, scattered wide
+- Drops:
+  - None.
+
+3) WRECKAGE
+- Spawn rules:
+  - 10% chance per sector.
+- Behavior:
+  - Static / destructible.
+- Drops:
+  - relic_droppable.png
+
+4) NODE
+- Spawn rules:
+  - Normal sector rules (non-hostile entity).
+- Behavior:
+  - Mobile, semi-intelligent.
+  - Approaches the player ship.
+  - Follows / observes the player for a short duration.
+  - Loses interest by default and departs the sector.
+- On destruction:
+  - Drops node_droppable.png
+
+5) SHARD
+- Spawn rules:
+  - 20% chance per sector.
+  - Cannot spawn in special sectors.
+  - Start sector is allowed.
+- Behavior:
+  - Static / destructible.
+- Drops:
+  - shard_droppable.png
+
+
+DROPPABLES (INSTANT UPGRADES)
+
+All droppables apply their effect immediately on pickup.
+Effects are permanent and equivalent to shop-purchased upgrades.
+
+1) relic_droppable
+- Effect:
+  - Increase player hull by +1.
+
+2) shard_droppable
+- Effect:
+  - Increase player fire rate.
+
+3) node_droppable
+- Effect:
+  - Increase player fuel tank capacity.
+
+
+GLOBAL NOTES
+
+- Special sector types never contain Lures or Shards.
+- Lures and Cores are encounter-modifying objects and do not provide direct player upgrades.
+- Droppables are single-effect, instant-use, non-inventory items.

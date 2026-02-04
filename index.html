@@ -46,6 +46,10 @@
     .start-screen {
       pointer-events: none;
     }
+    .overlay.start-screen {
+      align-items: flex-start;
+      padding-top: 6px;
+    }
     .boot-screen {
       transition: opacity 0.35s ease;
     }
@@ -75,6 +79,10 @@
       animation: boot-sweep 1.1s linear infinite;
       pointer-events: none;
     }
+    .start-button {
+      margin-top: auto;
+      margin-bottom: 50px;
+    }
     @keyframes boot-sweep {
       0% { transform: translateX(-100%); }
       100% { transform: translateX(100%); }
@@ -85,6 +93,9 @@
       align-items: center;
       gap: 26px;
       pointer-events: auto;
+      min-height: calc(100vh - 12px);
+      padding-bottom: 12px;
+      box-sizing: border-box;
     }
     .start-title {
       font-size: 62px;
@@ -97,12 +108,35 @@
       margin-bottom: 6px;
       padding: 14px 26px;
       text-align: center;
-      background: rgba(6, 12, 16, 0.92);
+      background: rgba(6, 12, 16, 0.15);
       border: 1px solid rgba(120, 200, 190, 0.45);
       box-shadow: 0 0 24px rgba(120, 200, 190, 0.35);
       position: relative;
       z-index: 2;
       width: min(720px, calc(100vw - 60px));
+      overflow: hidden;
+    }
+    .start-title::after {
+      content: "";
+      position: absolute;
+      inset: -40% -120%;
+      background: linear-gradient(
+        120deg,
+        transparent,
+        rgba(255, 130, 200, 0.45),
+        rgba(120, 220, 210, 0.5),
+        rgba(255, 210, 120, 0.45),
+        transparent
+      );
+      transform: translateX(-120%);
+      animation: title-shimmer 7s ease-in-out infinite;
+      mix-blend-mode: screen;
+      pointer-events: none;
+    }
+    @keyframes title-shimmer {
+      0% { transform: translateX(-120%); }
+      22% { transform: translateX(120%); }
+      100% { transform: translateX(120%); }
     }
     .start-subtitle {
       font-size: 21px;
@@ -127,6 +161,7 @@
       text-align: center;
       line-height: 1.4;
       animation: title-breathe 4.5s ease-in-out infinite;
+      margin-top: 0;
     }
     .start-subtitle-name {
       color: var(--ui-accent);
@@ -137,6 +172,7 @@
       min-height: 260px;
       position: relative;
       margin-bottom: 14px;
+      margin-top: clamp(40px, 10vh, 100px);
     }
     .start-slide {
       position: absolute;
@@ -365,7 +401,8 @@
       transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
     }
     .start-button {
-      margin-top: 50px;
+      margin-top: auto;
+      margin-bottom: 50px;
     }
     .start-capsule:hover,
     .start-capsule:focus {
@@ -743,6 +780,7 @@
         width: min(520px, 88vw);
         min-height: 190px;
         margin-bottom: 6px;
+        margin-top: clamp(24px, 8vh, 70px);
       }
       .start-card {
         padding: 12px 14px 14px;
@@ -781,78 +819,7 @@
 </head>
 <body>
   <canvas id="game"></canvas>
-  <div id="ui-root">
-    <div id="boot-screen" class="overlay start-screen boot-screen">
-      <div class="start-panel">
-        <div class="start-title">Concordant (V1)</div>
-        <button class="start-button start-capsule" type="button" disabled>Loading...</button>
-      </div>
-    </div>
-  </div>
-  <script type="module">
-    const bootScreen = document.getElementById("boot-screen");
-    const bootButton = bootScreen ? bootScreen.querySelector(".start-button") : null;
-    const setButton = (label, pct = null) => {
-      if (!bootButton) return;
-      bootButton.textContent = label;
-      if (typeof pct === "number") {
-        const clamped = Math.max(0, Math.min(100, Math.round(pct)));
-        bootButton.classList.remove("boot-indeterminate");
-        bootButton.style.background = `linear-gradient(90deg, rgba(120, 200, 190, 0.35) ${clamped}%, rgba(8, 12, 16, 0.0) ${clamped}%)`;
-        bootButton.style.borderColor = "rgba(120, 200, 190, 0.65)";
-      } else {
-        bootButton.classList.add("boot-indeterminate");
-        bootButton.style.background = "";
-        bootButton.style.borderColor = "";
-      }
-    };
-
-    const loadGame = async () => {
-      if (!bootButton) {
-        await import("./game.js");
-        return;
-      }
-      setButton("Loading...", null);
-      try {
-        const res = await fetch("./game.js", { cache: "no-store" });
-        if (!res.ok) {
-          throw new Error("game.js fetch failed");
-        }
-        const total = Number(res.headers.get("Content-Length"));
-        if (!res.body || !Number.isFinite(total) || total <= 0) {
-          const blob = await res.blob();
-          const url = URL.createObjectURL(blob);
-          const script = document.createElement("script");
-          script.src = url;
-          document.body.appendChild(script);
-          script.onload = () => URL.revokeObjectURL(url);
-          return;
-        }
-        const reader = res.body.getReader();
-        let received = 0;
-        const chunks = [];
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          chunks.push(value);
-          received += value.length;
-          const pct = (received / total) * 100;
-          setButton(`Loading... ${Math.min(99, Math.round(pct))}%`, pct);
-        }
-        setButton("Finalizing... 100%", 100);
-        const blob = new Blob(chunks, { type: "text/javascript" });
-        const url = URL.createObjectURL(blob);
-        const script = document.createElement("script");
-        script.src = url;
-        document.body.appendChild(script);
-        script.onload = () => URL.revokeObjectURL(url);
-      } catch (err) {
-        setButton("Load failed. Refresh.", null);
-        console.error(err);
-      }
-    };
-
-    loadGame();
-  </script>
+  <div id="ui-root"></div>
+  <script src="boot.js"></script>
 </body>
 </html>

@@ -7,8 +7,10 @@ import { sounds, music } from "./game/audio.js";
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
+const uiRoot = document.getElementById("ui-root");
 
 let audioUnlocked = false;
+let audioListenerBound = false;
 const unlockAudio = () => {
   if (audioUnlocked) {
     return;
@@ -22,24 +24,19 @@ function resize() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
 }
-window.addEventListener("resize", resize);
-resize();
-
-const handleFirstInput = () => {
-  unlockAudio();
-  window.removeEventListener("pointerdown", handleFirstInput);
-  window.removeEventListener("touchstart", handleFirstInput);
-};
-
-window.addEventListener("pointerdown", handleFirstInput, { passive: true });
-window.addEventListener("touchstart", handleFirstInput, { passive: true });
-
-const uiRoot = document.getElementById("ui-root");
 let gameController = null;
 let demoController = null;
 let escListener = null;
 let gameState = loadGameState();
 let sectorIndex = loadSectorIndex();
+let appStarted = false;
+
+if (typeof window !== "undefined") {
+  window.__WORLD_SEED__ = gameState?.worldSeed;
+  if (typeof window.__WORLD_SEED_READY__ === "function") {
+    window.__WORLD_SEED_READY__(gameState?.worldSeed);
+  }
+}
 
 function exitToMenuFromUI() {
   if (escListener) {
@@ -127,5 +124,30 @@ function beginGame() {
   window.addEventListener("keydown", escListener);
 }
 
-showStartScreenWithDemo();
+export function startApp() {
+  if (appStarted) {
+    return;
+  }
+  appStarted = true;
+  if (!canvas || !ctx) {
+    return;
+  }
+  resize();
+  if (!audioListenerBound) {
+    const handleFirstInput = () => {
+      unlockAudio();
+      window.removeEventListener("pointerdown", handleFirstInput);
+      window.removeEventListener("touchstart", handleFirstInput);
+    };
+    window.addEventListener("pointerdown", handleFirstInput, { passive: true });
+    window.addEventListener("touchstart", handleFirstInput, { passive: true });
+    audioListenerBound = true;
+  }
+  window.addEventListener("resize", resize);
+  showStartScreenWithDemo();
+}
+
+if (typeof window !== "undefined" && typeof window.__GAME_READY__ === "function") {
+  window.__GAME_READY__();
+}
 
