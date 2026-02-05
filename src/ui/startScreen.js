@@ -85,7 +85,7 @@ export function showStartScreen(root, onStart, onReset, options = {}) {
 
   const title = document.createElement("div");
   title.className = "start-title";
-  title.textContent = "Concordant (V0.5)";
+  title.textContent = "Concordant (V0.6)";
 
   const button = document.createElement("button");
   button.type = "button";

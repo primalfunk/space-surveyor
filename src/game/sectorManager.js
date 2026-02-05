@@ -6,6 +6,7 @@ import { ApseBackground } from "../entities/apseBackground.js";
 import { generateApseInterior } from "../entities/apseInterior.js";
 import { ApseMetalTexture } from "../entities/apseMetalTexture.js";
 import { PalimpsestFragment } from "../entities/palimpsestFragment.js";
+import { CoreObject, LureObject, NodeObject, ShardObject, WreckageObject } from "../entities/sectorObjects.js";
 import { clamp, createRng, hashInts, pickWeighted, randomInt, randomRange } from "./rng.js";
 import { getSectorMeta, saveSectorIndex, setSectorMeta, pruneSectorIndex } from "./sectorIndex.js";
 import { saveGameState } from "./gameState.js";
@@ -18,7 +19,7 @@ import { buildSectorModifiers } from "./sectorModifiers.js";
 export const SECTOR_SIZE = CONFIG.SECTOR.SIZE;
 export const SECTOR_TYPES = CONFIG.SECTOR.TYPES;
 
-const { SECTOR, STAR: STAR_CONFIG, ASTEROID, GOAL, FIELD, STATION, SHIP } = CONFIG;
+const { SECTOR, STAR: STAR_CONFIG, ASTEROID, GOAL, FIELD, STATION, SHIP, OBJECTS } = CONFIG;
 const STAR_GEN = STAR_CONFIG.GENERATION;
 const STAR = STAR_GEN;
 const STAR_WELL = STAR_GEN.WELL;
@@ -49,6 +50,9 @@ const MERIDIAN = SECTOR.MERIDIAN ?? {};
 const PALIMPSEST = SECTOR.PALIMPSEST ?? {};
 const PALIMPSEST_SINGULARITY = PALIMPSEST.SINGULARITY ?? {};
 const PALIMPSEST_FRAGMENTS = PALIMPSEST.FRAGMENTS ?? {};
+const OBJECTS_CONFIG = OBJECTS ?? {};
+const OBJECT_SPAWN_MARGIN = Number.isFinite(OBJECTS_CONFIG.SPAWN_MARGIN) ? OBJECTS_CONFIG.SPAWN_MARGIN : 160;
+const OBJECT_STAR_PADDING = Number.isFinite(OBJECTS_CONFIG.STAR_PADDING) ? OBJECTS_CONFIG.STAR_PADDING : 120;
 const SHIP_RADIUS = Number.isFinite(SHIP?.COLLISION_RADIUS) ? SHIP.COLLISION_RADIUS : 12;
 const MERIDIAN_SPINE_MULTIPLIER = Number.isFinite(MERIDIAN.SPINE_WIDTH_MULTIPLIER)
   ? MERIDIAN.SPINE_WIDTH_MULTIPLIER
@@ -58,6 +62,10 @@ const SPECIAL_TYPES = new Set([
   SECTOR_TYPES.QUIET_REACH,
   SECTOR_TYPES.MERIDIAN,
   SECTOR_TYPES.PALIMPSEST
+]);
+const OBJECT_BLOCKED_SECTORS = new Set([
+  ...SPECIAL_TYPES,
+  SECTOR_TYPES.SIGNAL_ORIGIN
 ]);
 const APSE_GRID_SIZE = 4;
 const APSE_BLOCK_CHANCE = 0.33;
@@ -99,6 +107,42 @@ function randomPointInBounds(rng, bounds, margin) {
     x: randomRange(rng, bounds.x + margin, bounds.x + bounds.size - margin),
     y: randomRange(rng, bounds.y + margin, bounds.y + bounds.size - margin)
   };
+}
+
+function pickObjectPosition(rng, bounds, stars, safePoint, safeRadius, station, radius = 0) {
+  const margin = OBJECT_SPAWN_MARGIN + radius;
+  const starPad = OBJECT_STAR_PADDING + radius;
+  for (let tries = 0; tries < 30; tries++) {
+    const pos = randomPointInBounds(rng, bounds, margin);
+    if (safePoint) {
+      const dx = pos.x - safePoint.x;
+      const dy = pos.y - safePoint.y;
+      if (Math.hypot(dx, dy) < safeRadius + radius + OBJECT_SPAWN_MARGIN * 0.5) {
+        continue;
+      }
+    }
+    if (station) {
+      const dx = pos.x - station.x;
+      const dy = pos.y - station.y;
+      if (Math.hypot(dx, dy) < (station.safeRadius ?? STATION_SAFE_RADIUS) + radius + 20) {
+        continue;
+      }
+    }
+    let blocked = false;
+    for (const star of stars) {
+      const dx = pos.x - star.x;
+      const dy = pos.y - star.y;
+      if (Math.hypot(dx, dy) < star.radius + starPad) {
+        blocked = true;
+        break;
+      }
+    }
+    if (blocked) {
+      continue;
+    }
+    return pos;
+  }
+  return null;
 }
 
 function applyVariance(rng, value, variance) {
@@ -1760,6 +1804,68 @@ export class SectorManager {
       asteroidOptions
     );
 
+    const blockObjects = OBJECT_BLOCKED_SECTORS.has(meta.sectorType);
+    const coreSeed = this.getSectorSeed(sx, sy, SEED_SALT.OBJECTS_CORE);
+    const lureSeed = this.getSectorSeed(sx, sy, SEED_SALT.OBJECTS_LURE);
+    const wreckSeed = this.getSectorSeed(sx, sy, SEED_SALT.OBJECTS_WRECKAGE);
+    const nodeSeed = this.getSectorSeed(sx, sy, SEED_SALT.OBJECTS_NODE);
+    const shardSeed = this.getSectorSeed(sx, sy, SEED_SALT.OBJECTS_SHARD);
+
+    const cores = [];
+    if (!blockObjects && OBJECTS_CONFIG.CORE?.SPAWN_CHANCE > 0) {
+      const rng = createRng(coreSeed);
+      if (rng() < OBJECTS_CONFIG.CORE.SPAWN_CHANCE) {
+        const pos = pickObjectPosition(rng, bounds, stars, entryOrigin, safeRadius, station, OBJECTS_CONFIG.CORE.RADIUS ?? 0);
+        if (pos) {
+          cores.push(new CoreObject(pos.x, pos.y, coreSeed));
+        }
+      }
+    }
+
+    const lures = [];
+    if (!blockObjects && OBJECTS_CONFIG.LURE?.SPAWN_CHANCE > 0) {
+      const rng = createRng(lureSeed);
+      if (rng() < OBJECTS_CONFIG.LURE.SPAWN_CHANCE) {
+        const pos = pickObjectPosition(rng, bounds, stars, entryOrigin, safeRadius, station, OBJECTS_CONFIG.LURE.RADIUS ?? 0);
+        if (pos) {
+          lures.push(new LureObject(pos.x, pos.y, lureSeed));
+        }
+      }
+    }
+
+    const wreckage = [];
+    if (OBJECTS_CONFIG.WRECKAGE?.SPAWN_CHANCE > 0) {
+      const rng = createRng(wreckSeed);
+      if (rng() < OBJECTS_CONFIG.WRECKAGE.SPAWN_CHANCE) {
+        const pos = pickObjectPosition(rng, bounds, stars, entryOrigin, safeRadius, station, OBJECTS_CONFIG.WRECKAGE.RADIUS ?? 0);
+        if (pos) {
+          wreckage.push(new WreckageObject(pos.x, pos.y, wreckSeed));
+        }
+      }
+    }
+
+    const nodes = [];
+    if (!blockObjects && OBJECTS_CONFIG.NODE?.SPAWN_CHANCE > 0) {
+      const rng = createRng(nodeSeed);
+      if (rng() < OBJECTS_CONFIG.NODE.SPAWN_CHANCE) {
+        const pos = pickObjectPosition(rng, bounds, stars, entryOrigin, safeRadius, station, OBJECTS_CONFIG.NODE.RADIUS ?? 0);
+        if (pos) {
+          nodes.push(new NodeObject(pos.x, pos.y, nodeSeed));
+        }
+      }
+    }
+
+    const shards = [];
+    if (!blockObjects && OBJECTS_CONFIG.SHARD?.SPAWN_CHANCE > 0) {
+      const rng = createRng(shardSeed);
+      if (rng() < OBJECTS_CONFIG.SHARD.SPAWN_CHANCE) {
+        const pos = pickObjectPosition(rng, bounds, stars, entryOrigin, safeRadius, station, OBJECTS_CONFIG.SHARD.RADIUS ?? 0);
+        if (pos) {
+          shards.push(new ShardObject(pos.x, pos.y, shardSeed));
+        }
+      }
+    }
+
     const clueCount = Math.max(0, Math.floor(this.gameState?.clues?.totalCollected ?? 0));
     const modifierSeed = Math.floor(Math.random() * 1e9);
     const modifiers = buildSectorModifiers({
@@ -1799,6 +1905,11 @@ export class SectorManager {
         apseInterior,
       apseRingThickness: apseRing?.ringThickness ?? null,
       asteroids,
+      cores,
+      lures,
+      wreckage,
+      nodes,
+      shards,
       occlusion: modifiers.occlusion,
       dragFields: modifiers.dragFields,
       goalCollected: meta.surveyComplete ? true : false,

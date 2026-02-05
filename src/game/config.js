@@ -404,6 +404,7 @@ const EFFECTS = {
 const INPUT = {
   TOUCH: {
     DEADZONE: 12,
+    BUTTON_SCALE: 2,
     THRUST_RADIUS_MIN: 15,
     THRUST_RADIUS_MAX: 30,
     THRUST_RADIUS_SCALE: 0.04,
@@ -692,6 +693,102 @@ const PICKUPS = {
     ROT_SPEED_MIN: 2.0,
     ROT_SPEED_MAX: 5.0,
     SPRITE_SRC: "assets/ui/sprites/enemy_chunk.png"
+  }
+};
+
+// Sector object tuning and droppable upgrades.
+const OBJECTS = {
+  SPAWN_MARGIN: 160,
+  STAR_PADDING: 120,
+  CORE: {
+    SPAWN_CHANCE: 0.15,
+    SPRITE_SRC: "assets/ui/sprites/core.png",
+    SIZE: 70,
+    RADIUS: 34,
+    ROT_SPEED_MIN: 0.12,
+    ROT_SPEED_MAX: 0.26,
+    SHOTS_TO_DESTROY: 1
+  },
+  LURE: {
+    SPAWN_CHANCE: 0.05,
+    SPRITE_SRC: "assets/ui/sprites/lure.png",
+    SIZE: 60,
+    RADIUS: 30,
+    ROT_SPEED_MIN: 0.08,
+    ROT_SPEED_MAX: 0.18,
+    SHOTS_TO_DESTROY: 1,
+    ENEMY_MIN: 1,
+    ENEMY_MAX: 3,
+    SPAWN_BUFFER: 120
+  },
+  WRECKAGE: {
+    SPAWN_CHANCE: 0.1,
+    SPRITE_SRC: "assets/ui/sprites/wreckage.png",
+    SIZE: 64,
+    RADIUS: 32,
+    ROT_SPEED_MIN: 0.06,
+    ROT_SPEED_MAX: 0.14,
+    SHOTS_TO_DESTROY: 1
+  },
+  NODE: {
+    SPAWN_CHANCE: 0.15,
+    SPRITE_SRC: "assets/ui/sprites/node.png",
+    SIZE: 52,
+    RADIUS: 26,
+    ROT_SPEED_MIN: 0.08,
+    ROT_SPEED_MAX: 0.16,
+    FOLLOW_TIME_SEC: 300,
+    MIN_DISTANCE: 30,
+    MAX_SPEED: 90,
+    ACCEL: 140,
+    TURN_RATE: 1.6,
+    INVESTIGATE_TIME_SEC: 10,
+    LEAVE_SPEED: 120
+  },
+  SHARD: {
+    SPAWN_CHANCE: 0.2,
+    SPRITE_SRC: "assets/ui/sprites/shard.png",
+    SIZE: 48,
+    RADIUS: 22,
+    ROT_SPEED_MIN: 1.6,
+    ROT_SPEED_MAX: 3.2,
+    SHOTS_TO_DESTROY: 1,
+    GLOW_COLOR: "rgba(180, 220, 255, 0.75)",
+    GLOW_ALPHA: 0.35,
+    GLOW_SCALE: 1.8
+  },
+  DROPPABLES: {
+    RELIC: {
+      SPRITE_SRC: "assets/ui/sprites/relic_droppable.png",
+      RADIUS: 18,
+      ROT_SPEED_MIN: 0.6,
+      ROT_SPEED_MAX: 1.2,
+      BOB_FREQ: 1.4,
+      BOB_AMP: 3.0
+    },
+    SHARD: {
+      SPRITE_SRC: "assets/ui/sprites/shard_droppable.png",
+      RADIUS: 18,
+      ROT_SPEED_MIN: 0.6,
+      ROT_SPEED_MAX: 1.2,
+      BOB_FREQ: 1.4,
+      BOB_AMP: 3.0
+    },
+    NODE: {
+      SPRITE_SRC: "assets/ui/sprites/node_droppable.png",
+      RADIUS: 18,
+      ROT_SPEED_MIN: 0.6,
+      ROT_SPEED_MAX: 1.2,
+      BOB_FREQ: 1.4,
+      BOB_AMP: 3.0
+    }
+  },
+  EXPLOSION_RING: {
+    BASE_RADIUS: 60,
+    LIFE: 0.45,
+    WIDTH: 6,
+    COLOR: "rgba(255, 80, 80, 0.4)",
+    CORE_MULT: 3.0
   }
 };
 
@@ -993,7 +1090,13 @@ const SECTOR = {
       ANCHOR: 1222,
       STATION: 1333,
       SPECIAL: 1444,
-      MERIDIAN: 1555
+      MERIDIAN: 1555,
+      OBJECTS_CORE: 1660,
+      OBJECTS_LURE: 1661,
+      OBJECTS_WRECKAGE: 1662,
+      OBJECTS_NODE: 1663,
+      OBJECTS_SHARD: 1664,
+      OBJECTS_DROP: 1665
     },
   SIGNAL_ORIGIN: {
     FORCE_NEAR_ORIGIN: true,
@@ -1390,6 +1493,7 @@ export const CONFIG = {
   SHIP,
   ENEMY,
   PICKUPS,
+  OBJECTS,
   BEACON_RELIC,
   GOAL,
   END_ZONE,
